@@ -1,0 +1,2152 @@
+Index: app/src/main/java/pl/example/connectnear/AuthRepo.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/AuthRepo.kt b/app/src/main/java/pl/example/connectnear/AuthRepo.kt
+--- a/app/src/main/java/pl/example/connectnear/AuthRepo.kt
++++ b/app/src/main/java/pl/example/connectnear/AuthRepo.kt
+@@ -1,51 +1,65 @@
+ package pl.example.connectnear
+ 
+ import com.google.firebase.auth.FirebaseAuth
+-import pl.example.connectnear.FirebaseService.startNewSession
+ 
+-object AuthRepo {    private val auth = FirebaseAuth.getInstance()
++object AuthRepo {
++    private val auth = FirebaseAuth.getInstance()
++    val currentUser get() = auth.currentUser
+ 
+     fun signUp(email: String, pass: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+-        auth.signInWithEmailAndPassword(email, pass).addOnSuccessListener { authResult ->
+-            val userId = authResult.user?.uid
+-            if (userId != null) {
+-                // ZAMIAST OD RAZU onSuccess(), NAJPIERW USTAW SESJĘ:
+-                startNewSession(userId) {
+-                    onSuccess() // Dopiero teraz wpuść użytkownika
+-                }
+-            } else {
+-                onSuccess()
++        auth.createUserWithEmailAndPassword(email, pass)
++            .addOnSuccessListener {
++                // Po sukcesie wysyłamy e-mail weryfikacyjny (opcjonalnie, ale dobra praktyka)
++                it.user?.sendEmailVerification()
++                    ?.addOnSuccessListener {
++                        // WAŻNE: Wylogowujemy użytkownika od razu po rejestracji.
++                        // Musi on zalogować się ponownie, aby rozpocząć sesję.
++                        auth.signOut()
++                        onSuccess()
++                    }
++                    ?.addOnFailureListener { e ->
++                        onError("Konto utworzone, ale błąd wysyłania e-maila: ${e.message}")
++                    }
+             }
+-        }
+-            .addOnFailureListener { onError(it.message ?: "Błąd") }
++            .addOnFailureListener {
++                // Zwracamy czytelny komunikat błędu
++                val message = when {
++                    "email address is already in use" in (it.message ?: "") -> "Ten adres e-mail jest już zajęty!"
++                    "weak password" in (it.message ?: "") -> "Hasło jest zbyt słabe!"
++                    else -> it.message ?: "Nieznany błąd rejestracji."
++                }
++                onError(message)
++            }
+     }
+-
+ 
+     fun signIn(email: String, pass: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+-        auth.signInWithEmailAndPassword(email, pass).addOnSuccessListener { authResult ->
+-            val userId = authResult.user?.uid
+-            if (userId != null) {
+-                // ZAMIAST OD RAZU onSuccess(), NAJPIERW USTAW SESJĘ:
+-                startNewSession(userId) {
+-                    onSuccess() // Dopiero teraz wpuść użytkownika
+-                }
+-            } else {
++        auth.signInWithEmailAndPassword(email, pass)
++            .addOnSuccessListener {
++                // Po udanym zalogowaniu, logika w MainActivity/AppNavigation pobierze profil
+                 onSuccess()
+             }
+-        }
+-            .addOnFailureListener { onError(it.message ?: "Błąd") }
++            .addOnFailureListener {
++                val message = when {
++                    "INVALID_LOGIN_CREDENTIALS" in (it.message ?: "") -> "Nieprawidłowy e-mail lub hasło."
++                    else -> it.message ?: "Błąd logowania."
++                }
++                onError(message)
++            }
+     }
+ 
+-
+-    fun signOut() { auth.signOut() }
++    fun signOut() {
++        auth.signOut()
++    }
+ 
+     fun sendPasswordResetEmail(email: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+-        if (email.isBlank()) { onError("Wpisz e-mail."); return }
+-        auth.sendPasswordResetEmail(email).addOnSuccessListener { onSuccess() }
++        if (email.isBlank()) {
++            onError("Wpisz e-mail.")
++            return
++        }
++        auth.sendPasswordResetEmail(email)
++            .addOnSuccessListener { onSuccess() }
+             .addOnFailureListener { onError(it.message ?: "") }
+     }
+ 
+-    // Pomocnicze
+     fun getCurrentUserId(): String? = auth.currentUser?.uid
+-    val currentUser get() = auth.currentUser
+ }
+Index: app/src/main/java/pl/example/connectnear/ChatScreen.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/ChatScreen.kt b/app/src/main/java/pl/example/connectnear/ChatScreen.kt
+--- a/app/src/main/java/pl/example/connectnear/ChatScreen.kt
++++ b/app/src/main/java/pl/example/connectnear/ChatScreen.kt
+@@ -1,13 +1,15 @@
+ package pl.example.connectnear
+ 
+-import android.content.Intent
+ import android.net.Uri
+ import androidx.activity.compose.rememberLauncherForActivityResult
+ import androidx.activity.result.contract.ActivityResultContracts
+ import androidx.compose.foundation.background
++import androidx.compose.foundation.border
+ import androidx.compose.foundation.layout.*
+ import androidx.compose.foundation.lazy.LazyColumn
+ import androidx.compose.foundation.lazy.items
++import androidx.compose.foundation.lazy.rememberLazyListState
++import androidx.compose.foundation.shape.CircleShape
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.material.icons.Icons
+ import androidx.compose.material.icons.filled.Add
+@@ -19,6 +21,7 @@
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.draw.clip
++import androidx.compose.ui.graphics.Brush
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.layout.ContentScale
+ import androidx.compose.ui.platform.LocalContext
+@@ -30,114 +33,117 @@
+ @Composable
+ fun ChatScreen(
+     myUserId: String,
+-    myUserName: String, // <--- NOWY PARAMETR: Twoje imię
+-    otherUserId: String,
++    myUserName: String,
++    otherUserId: String, // Jeśli isGroup=true, to jest to groupId
+     otherUserName: String,
++    isGroup: Boolean = false, // Nowa flaga
+     onBackClick: () -> Unit
+ ) {
+-    if (myUserId.isEmpty() || otherUserId.isEmpty()) {
+-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+-                Text("Błąd czatu: Brak ID użytkownika.")
+-                Button(onClick = onBackClick, modifier = Modifier.padding(top = 20.dp)) { Text("Wróć") }
+-            }
+-        }
+-        return
+-    }
++    var messageText by remember { mutableStateOf("") }
++    var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
+ 
++    // Ustalanie ID czatu:
++    // - Dla grupy: ID grupy jest stałe i jest przekazane w 'otherUserId'.
++    // - Dla priv: ID jest kombinacją dwóch userów (zawsze takie samo dla tej pary).
++    val chatId = if (isGroup) otherUserId else FirebaseService.getChatId(myUserId, otherUserId)
++
++    val listState = rememberLazyListState()
+     val context = LocalContext.current
+-    val chatId = FirebaseService.getChatId(myUserId, otherUserId)
+-    var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
+-    var text by remember { mutableStateOf("") }
+-    var isUploading by remember { mutableStateOf(false) }
++
++    // Pobieranie wiadomości
++    LaunchedEffect(chatId) {
++        FirebaseService.getMessages(chatId) { newMessages ->
++            messages = newMessages
++        }
++    }
+ 
+-    // 1. ZDJĘCIA
+-    val imagePickerLauncher = rememberLauncherForActivityResult(
+-        contract = ActivityResultContracts.GetContent()
+-    ) { uri: Uri? ->
++    // Przewijanie na dół przy nowej wiadomości
++    LaunchedEffect(messages.size) {
++        if (messages.isNotEmpty()) {
++            listState.animateScrollToItem(messages.size - 1)
++        }
++    }
++
++    // Wysyłanie zdjęć
++    val imagePicker = rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri: Uri? ->
+         if (uri != null) {
+-            isUploading = true
+             FirebaseService.uploadFileToStorage(uri, "chat_images",
+-                onSuccess = { downloadUrl ->
+-                    val msg = ChatMessage(myUserId, text = "Wysłano zdjęcie", imageUrl = downloadUrl, timestamp = System.currentTimeMillis())
+-                    // TU UŻYWAMY MOJEGO IMIENIA ZAMIAST "Użytkownik"
+-                    FirebaseService.sendMessage(chatId, msg, otherUserId, myUserName)
+-                    isUploading = false
+-                },
+-                onError = { isUploading = false }
+-            )
+-        }
+-    }
+-
+-    // 2. PLIKI
+-    val filePickerLauncher = rememberLauncherForActivityResult(
+-        contract = ActivityResultContracts.GetContent()
+-    ) { uri: Uri? ->
+-        if (uri != null) {
+-            isUploading = true
+-            FirebaseService.uploadFileToStorage(uri, "chat_files",
+-                onSuccess = { downloadUrl ->
+-                    val fileName = uri.lastPathSegment ?: "plik"
+-                    val msg = ChatMessage(myUserId, text = "Wysłano plik", fileUrl = downloadUrl, fileName = fileName, timestamp = System.currentTimeMillis())
+-                    // TU UŻYWAMY MOJEGO IMIENIA ZAMIAST "Użytkownik"
+-                    FirebaseService.sendMessage(chatId, msg, otherUserId, myUserName)
+-                    isUploading = false
++                onSuccess = { url ->
++                    val msg = ChatMessage(
++                        senderId = myUserId,
++                        imageUrl = url,
++                        timestamp = System.currentTimeMillis()
++                    )
++                    // Przekazujemy isGroup do serwisu
++                    FirebaseService.sendMessage(chatId, msg, otherUserId, myUserName, isGroup)
+                 },
+-                onError = { isUploading = false }
++                onError = {}
+             )
+         }
+     }
+ 
+-    // Pobieranie wiadomości
+-    LaunchedEffect(chatId) {
+-        FirebaseService.getMessages(chatId) { msgs -> messages = msgs }
+-    }
+-
+-    Column(modifier = Modifier.fillMaxSize().background(Color(0xFFEFEFEF))) {
++    Column(
++        modifier = Modifier
++            .fillMaxSize()
++            .background(Brush.verticalGradient(colors = listOf(Color(0xFF0AA4F4), Color(0xFF1CD9C3))))
++    ) {
+         // Nagłówek
+         Row(
+-            modifier = Modifier.fillMaxWidth().background(Color(0xFF0AA4F4)).padding(16.dp),
++            modifier = Modifier
++                .fillMaxWidth()
++                .background(Color.White.copy(alpha = 0.2f))
++                .padding(16.dp),
+             verticalAlignment = Alignment.CenterVertically
+         ) {
+-            Button(onClick = onBackClick, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)) { Text("<") }
+-            Spacer(modifier = Modifier.width(10.dp))
+-            Text(otherUserName, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
++            Button(onClick = onBackClick, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)) {
++                Text("<")
++            }
++            Spacer(modifier = Modifier.width(16.dp))
++            Column {
++                Text(text = otherUserName, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
++                if (isGroup) {
++                    Text(text = "Czat grupowy", fontSize = 12.sp, color = Color.White.copy(0.8f))
++                }
++            }
+         }
+ 
+         // Lista wiadomości
+-        LazyColumn(modifier = Modifier.weight(1f).padding(8.dp), reverseLayout = true) {
+-            items(messages.reversed()) { msg ->
++        LazyColumn(
++            state = listState,
++            modifier = Modifier
++                .weight(1f)
++                .padding(horizontal = 8.dp),
++            contentPadding = PaddingValues(vertical = 8.dp)
++        ) {
++            items(messages) { msg ->
+                 val isMe = msg.senderId == myUserId
+-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = if (isMe) Alignment.CenterEnd else Alignment.CenterStart) {
++                Row(
++                    modifier = Modifier.fillMaxWidth(),
++                    horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start
++                ) {
+                     Card(
++                        shape = RoundedCornerShape(12.dp),
+                         colors = CardDefaults.cardColors(containerColor = if (isMe) Color(0xFFDCF8C6) else Color.White),
+-                        modifier = Modifier.padding(4.dp).widthIn(max = 280.dp)
++                        modifier = Modifier.padding(vertical = 4.dp).widthIn(max = 280.dp)
+                     ) {
+                         Column(modifier = Modifier.padding(8.dp)) {
++                            // Zdjęcie
+                             if (msg.imageUrl.isNotEmpty()) {
+                                 AsyncImage(
+                                     model = msg.imageUrl,
+-                                    contentDescription = "Zdjęcie",
+-                                    modifier = Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(8.dp)),
++                                    contentDescription = "Wysłane zdjęcie",
++                                    modifier = Modifier
++                                        .fillMaxWidth()
++                                        .height(200.dp)
++                                        .clip(RoundedCornerShape(8.dp)),
+                                     contentScale = ContentScale.Crop
+                                 )
+                                 Spacer(modifier = Modifier.height(4.dp))
+                             }
+-                            if (msg.fileUrl.isNotEmpty()) {
+-                                Button(
+-                                    onClick = {
+-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(msg.fileUrl))
+-                                        context.startActivity(intent)
+-                                    },
+-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEEEEEE), contentColor = Color.Black),
+-                                    modifier = Modifier.fillMaxWidth()
+-                                ) {
+-                                    Text("📄 ${msg.fileName.take(15)}...")
+-                                }
+-                                Spacer(modifier = Modifier.height(4.dp))
+-                            }
+-                            if (msg.text.isNotEmpty() && msg.text != "Wysłano zdjęcie" && msg.text != "Wysłano plik") {
+-                                Text(text = msg.text, color = Color.Black)
++
++                            // Tekst
++                            if (msg.text.isNotEmpty()) {
++                                Text(text = msg.text, color = Color.Black, fontSize = 16.sp)
+                             }
+                         }
+                     }
+@@ -145,31 +151,46 @@
+             }
+         }
+ 
+-        if (isUploading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
++        // Pole tekstowe
++        Row(
++            modifier = Modifier
++                .fillMaxWidth()
++                .padding(8.dp)
++                .background(Color.White, shape = RoundedCornerShape(30.dp))
++                .padding(horizontal = 8.dp, vertical = 4.dp),
++            verticalAlignment = Alignment.CenterVertically
++        ) {
++            IconButton(onClick = { imagePicker.launch("image/*") }) {
++                Icon(Icons.Default.Add, contentDescription = "Dodaj plik", tint = Color.Gray)
++            }
+ 
+-        Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+-            IconButton(onClick = { imagePickerLauncher.launch("image/*") }) { Icon(Icons.Default.Add, contentDescription = "Dodaj", tint = Color.Gray) }
+-            IconButton(onClick = { filePickerLauncher.launch("*/*") }) { Text("📎", fontSize = 20.sp) }
+             OutlinedTextField(
+-                value = text,
+-                onValueChange = { text = it },
++                value = messageText,
++                onValueChange = { messageText = it },
++                placeholder = { Text("Napisz wiadomość...") },
+                 modifier = Modifier.weight(1f),
+-                placeholder = { Text("Wpisz wiadomość...") },
+-                shape = RoundedCornerShape(24.dp),
+-                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Color.White, unfocusedContainerColor = Color.White)
++                colors = OutlinedTextFieldDefaults.colors(
++                    focusedContainerColor = Color.Transparent,
++                    unfocusedContainerColor = Color.Transparent,
++                    focusedBorderColor = Color.Transparent,
++                    unfocusedBorderColor = Color.Transparent
++                )
+             )
+-            IconButton(
+-                onClick = {
+-                    if (text.isNotBlank()) {
+-                        val msg = ChatMessage(myUserId, text, timestamp = System.currentTimeMillis())
+ 
+-                        // TU TEŻ ZMIANA: Przekazujemy myUserName
+-                        FirebaseService.sendMessage(chatId, msg, otherUserId, myUserName)
+-                        text = ""
+-                    }
+-                },
+-                enabled = text.isNotBlank() || isUploading
+-            ) { Icon(Icons.Default.Send, contentDescription = "Wyślij", tint = Color(0xFF0AA4F4)) }
++            IconButton(onClick = {
++                if (messageText.isNotBlank()) {
++                    val msg = ChatMessage(
++                        senderId = myUserId,
++                        text = messageText.trim(),
++                        timestamp = System.currentTimeMillis()
++                    )
++                    // Przekazujemy isGroup do serwisu
++                    FirebaseService.sendMessage(chatId, msg, otherUserId, myUserName, isGroup)
++                    messageText = ""
++                }
++            }) {
++                Icon(Icons.Default.Send, contentDescription = "Wyślij", tint = Color(0xFF006400))
++            }
+         }
+     }
+ }
+Index: app/src/main/java/pl/example/connectnear/ChatRepo.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/ChatRepo.kt b/app/src/main/java/pl/example/connectnear/ChatRepo.kt
+new file mode 100644
+--- /dev/null
++++ b/app/src/main/java/pl/example/connectnear/ChatRepo.kt
+@@ -0,0 +1,93 @@
++package pl.example.connectnear
++
++import android.net.Uri
++import com.google.firebase.firestore.FirebaseFirestore
++import com.google.firebase.firestore.Query
++import com.google.firebase.storage.FirebaseStorage
++import java.util.UUID
++
++object ChatRepo {
++    private val db = FirebaseFirestore.getInstance()
++    private val storage = FirebaseStorage.getInstance()
++
++    fun getChatId(user1: String, user2: String): String = if (user1 < user2) "${user1}_$user2" else "${user2}_$user1"
++
++    // W pliku ChatRepo.kt
++
++    fun sendMessage(chatId: String, message: ChatMessage, receiverId: String, senderName: String, isGroup: Boolean = false) {
++        db.collection("chats").document(chatId).collection("messages").add(message)
++
++        // Aktualizujemy ostatnią wiadomość (dla grup ważne, dla priv opcjonalne)
++        if (isGroup) {
++            db.collection("groups").document(chatId).update(
++                "lastMessage", "${senderName}: ${if(message.text.isNotEmpty()) message.text else "Plik"}",
++                "timestamp", System.currentTimeMillis()
++            )
++
++            // Powiadomienia dla wszystkich członków grupy
++            db.collection("groups").document(chatId).get().addOnSuccessListener { doc ->
++                val members = doc.get("memberIds") as? List<String> ?: emptyList()
++                val notif = hashMapOf(
++                    "type" to "message",
++                    "senderName" to (if(isGroup) "Grupa" else senderName),
++                    "text" to "$senderName: ${if(message.text.isNotEmpty()) message.text else "Wysłano plik"}",
++                    "read" to false,
++                    "timestamp" to System.currentTimeMillis()
++                )
++
++                members.forEach { memberId ->
++                    if (memberId != message.senderId) { // Nie wysyłaj powiadomienia do siebie
++                        db.collection("users").document(memberId).collection("notifications").add(notif)
++                    }
++                }
++            }
++        } else {
++            // Stara logika dla czatu prywatnego (1 na 1)
++            val notif = hashMapOf(
++                "type" to "message",
++                "senderName" to senderName,
++                "senderId" to message.senderId,
++                "text" to (if(message.text.isNotEmpty()) message.text else "Plik"),
++                "read" to false,
++                "timestamp" to System.currentTimeMillis()
++            )
++            db.collection("users").document(receiverId).collection("notifications").add(notif)
++        }
++    }
++
++
++    fun getMessages(chatId: String, onUpdate: (List<ChatMessage>) -> Unit) {
++        db.collection("chats").document(chatId).collection("messages")
++            .orderBy("timestamp", Query.Direction.ASCENDING)
++            .addSnapshotListener { v, _ ->
++                onUpdate(v?.toObjects(ChatMessage::class.java) ?: emptyList())
++            }
++    }
++
++    fun uploadFileToStorage(uri: Uri, folder: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
++        val filename = "${UUID.randomUUID()}"
++        val ref = storage.reference.child("$folder/$filename")
++        ref.putFile(uri).continueWithTask { task ->
++            if (!task.isSuccessful) task.exception?.let { throw it }
++            ref.downloadUrl
++        }.addOnCompleteListener { task ->
++            if (task.isSuccessful) onSuccess(task.result.toString()) else onError(task.exception?.message ?: "")
++        }
++    }
++
++    fun listenForNotifications(myUserId: String, onNewNotification: (Map<String, Any>) -> Unit) {
++        db.collection("users").document(myUserId).collection("notifications")
++            .whereEqualTo("read", false)
++            .addSnapshotListener { snapshots, e ->
++                if (e != null) return@addSnapshotListener
++                for (dc in snapshots!!.documentChanges) {
++                    if (dc.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
++                        val data = dc.document.data.toMutableMap()
++                        data["id"] = dc.document.id
++                        onNewNotification(data)
++                        db.collection("users").document(myUserId).collection("notifications").document(dc.document.id).update("read", true)
++                    }
++                }
++            }
++    }
++}
+Index: app/src/main/java/pl/example/connectnear/UserDat.kt
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/UserDat.kt b/app/src/main/java/pl/example/connectnear/UserDat.kt
+new file mode 100644
+--- /dev/null
++++ b/app/src/main/java/pl/example/connectnear/UserDat.kt
+@@ -0,0 +1,2 @@
++package pl.example.connectnear
++
+Index: app/src/main/java/pl/example/connectnear/MapScreen.kt
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/MapScreen.kt b/app/src/main/java/pl/example/connectnear/MapScreen.kt
+new file mode 100644
+--- /dev/null
++++ b/app/src/main/java/pl/example/connectnear/MapScreen.kt
+@@ -0,0 +1,241 @@
++package pl.example.connectnear
++
++import android.Manifest
++import android.content.pm.PackageManager
++import android.widget.Toast
++import androidx.activity.compose.rememberLauncherForActivityResult
++import androidx.activity.result.contract.ActivityResultContracts
++import androidx.compose.foundation.layout.*
++import androidx.compose.material3.*
++import androidx.compose.runtime.*
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.platform.LocalContext
++import androidx.compose.ui.unit.dp
++import androidx.core.content.ContextCompat
++import com.google.android.gms.location.LocationServices
++import com.google.android.gms.location.Priority
++import com.google.android.gms.maps.model.LatLng
++import com.google.firebase.firestore.GeoPoint
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.isActive
++import kotlinx.coroutines.launch
++
++@Composable
++fun FourthStage(
++    userSelection: UserSelection,
++    onBackClick: () -> Unit,
++    onChatClick: (String, String) -> Unit,
++    onProfileClick: () -> Unit,
++    onOtherUserProfileClick: (String) -> Unit,
++    onFriendsListClick: () -> Unit
++) {
++    val context = LocalContext.current
++    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
++    val scope = rememberCoroutineScope()
++    val snackbarHostState = remember { SnackbarHostState() }
++
++    // --- STANY DANYCH ---
++    var myLocation by remember { mutableStateOf<LatLng?>(null) }
++    var otherUsers by remember { mutableStateOf<List<FoundUser>>(emptyList()) }
++    var selectedUser by remember { mutableStateOf<FoundUser?>(null) }
++
++    // --- STANY UI (DIALOGI) ---
++    var showFriendRequestDialog by remember { mutableStateOf(false) }
++    var requestSenderName by remember { mutableStateOf("") }
++    var requestSenderId by remember { mutableStateOf("") }
++
++    // Stan okna ustawień
++    var showSettingsDialog by remember { mutableStateOf(false) }
++
++    // Tymczasowe stany do edycji ustawień (zanim klikniemy "Zapisz")
++    var tempVisibilityMode by remember { mutableStateOf(userSelection.visibilityMode) }
++    var tempInterval by remember { mutableStateOf(userSelection.locationUpdateInterval) }
++    var expandedIntervals by remember { mutableStateOf(false) }
++
++    // Opcje czasu GPS
++    val intervals = mapOf(
++        "30s" to 30000L,
++        "1m" to 60000L,
++        "5m" to 300000L,
++        "30m" to 1800000L,
++        "1h" to 3600000L
++    )
++    val intervalNames = intervals.entries.associate { (k, v) -> v to k }
++
++    // --- 1. POWIADOMIENIA ---
++    LaunchedEffect(userSelection.userId) {
++        if (userSelection.userId.isNotEmpty()) {
++            FirebaseService.listenForNotifications(userSelection.userId) { data ->
++                val type = data["type"] as? String ?: "message"
++                val senderName = data["senderName"] as? String ?: "Ktoś"
++                val text = data["text"] as? String ?: ""
++                val senderId = data["senderId"] as? String ?: ""
++
++                if (type == "friend_request") {
++                    requestSenderName = senderName
++                    requestSenderId = senderId
++                    showFriendRequestDialog = true
++                } else {
++                    scope.launch {
++                        snackbarHostState.showSnackbar("$senderName: $text", duration = SnackbarDuration.Short, withDismissAction = true)
++                    }
++                }
++            }
++        }
++    }
++
++    // --- 2. GPS LOGIKA (POPRAWIONA - JEDEN BLOK KODU) ---
++
++    // Sprawdzamy uprawnienia przy starcie
++    var hasPermission by remember {
++        mutableStateOf(
++            ContextCompat.checkSelfPermission(
++                context,
++                Manifest.permission.ACCESS_FINE_LOCATION
++            ) == PackageManager.PERMISSION_GRANTED
++        )
++    }
++
++    // Launcher do pytania o zgodę (tylko raz!)
++    val permissionLauncher = rememberLauncherForActivityResult(
++        contract = ActivityResultContracts.RequestMultiplePermissions(),
++        onResult = { permissions ->
++            hasPermission = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
++                    permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
++        }
++    )
++
++    // Uruchamiamy pytanie tylko jeśli nie mamy zgody
++    LaunchedEffect(Unit) {
++        if (!hasPermission) {
++            permissionLauncher.launch(
++                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
++            )
++        }
++    }
++
++    // Pętla GPS (reaguje na zmianę userSelection.locationUpdateInterval po zapisie ustawień)
++    LaunchedEffect(userSelection.locationUpdateInterval, hasPermission) {
++        if (hasPermission) {
++            while (isActive) {
++                try {
++                    fusedLocationClient.lastLocation.addOnSuccessListener { location ->
++                        if (location != null) {
++                            myLocation = LatLng(location.latitude, location.longitude)
++                            userSelection.location = GeoPoint(location.latitude, location.longitude)
++                            FirebaseService.saveCurrentUser(userSelection) { FirebaseService.findMatches(userSelection) { otherUsers = it } }
++                        } else {
++                            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).addOnSuccessListener { l ->
++                                if (l != null) {
++                                    myLocation = LatLng(l.latitude, l.longitude)
++                                    userSelection.location = GeoPoint(l.latitude, l.longitude)
++                                    FirebaseService.saveCurrentUser(userSelection) { FirebaseService.findMatches(userSelection) { otherUsers = it } }
++                                }
++                            }
++                        }
++                    }
++                } catch (e: SecurityException) { }
++                delay(userSelection.locationUpdateInterval)
++            }
++        }
++    }
++
++    // --- 3. BUDOWANIE EKRANU ---
++    Box(modifier = Modifier.fillMaxSize()) {
++
++        // A. MAPA (z FourthStageComponents.kt)
++        FourthStageMap(
++            myLocation = myLocation,
++            otherUsers = otherUsers,
++            onMapClick = { selectedUser = null },
++            onUserMarkerClick = { selectedUser = it },
++            hasPermission = hasPermission,
++            onPermissionRequest = { permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)) }
++        )
++
++        // B. POWIADOMIENIA (SNACKBAR)
++        SnackbarHost(hostState = snackbarHostState, modifier = Modifier.align(Alignment.TopCenter).padding(top = 50.dp))
++
++        // C. PRZYCISK USTAWIEŃ (Zębatka)
++        FourthStageSettingsFab(onClick = {
++            // Pobieramy aktualne ustawienia do zmiennych tymczasowych przed otwarciem okna
++            tempVisibilityMode = userSelection.visibilityMode
++            tempInterval = userSelection.locationUpdateInterval
++            showSettingsDialog = true
++        })
++
++        // D. DOLNY PANEL STEROWANIA (z FourthStageControls.kt)
++        FourthStageControls(
++            selectedUser = selectedUser,
++            currentRefreshRate = userSelection.locationUpdateInterval, // Pokazuje aktualny czas
++            onChatClick = { selectedUser?.let { onChatClick(it.userId, it.name) } },
++            onSendRequestClick = {
++                selectedUser?.let {
++                    FirebaseService.sendFriendRequest(
++                        userSelection.userId, userSelection.name, it.userId,
++                        { Toast.makeText(context, "Wysłano!", Toast.LENGTH_SHORT).show() },
++                        { Toast.makeText(context, "Błąd", Toast.LENGTH_SHORT).show() })
++                }
++            },
++            onOtherProfileClick = { selectedUser?.let { onOtherUserProfileClick(it.userId) } },
++            onCloseUserClick = { selectedUser = null },
++            onExitClick = onBackClick,
++            onFriendsListClick = onFriendsListClick,
++            onMyProfileClick = onProfileClick
++        )
++
++        // E. OKNO DIALOGOWE ZAPROSZENIA
++        if (showFriendRequestDialog) {
++            FourthStageFriendRequestDialog(
++                senderName = requestSenderName,
++                onAccept = {
++                    FirebaseService.acceptFriendRequest(
++                        userSelection.userId,
++                        requestSenderId,
++                        requestSenderName
++                    ) {
++                        Toast.makeText(context, "Dodano!", Toast.LENGTH_SHORT).show()
++                        showFriendRequestDialog = false
++                    }
++                },
++                onReject = { showFriendRequestDialog = false }
++            )
++        }
++
++        // F. OKNO DIALOGOWE USTAWIEŃ (Publiczny/Znajomi + Czas GPS)
++        if (showSettingsDialog) {
++            FourthStageSettingsDialog(
++                tempVisibilityMode = tempVisibilityMode,
++                onVisibilityChange = { tempVisibilityMode = it },
++                tempInterval = tempInterval,
++                onIntervalChange = { tempInterval = it },
++                expandedIntervals = expandedIntervals,
++                onExpandedChange = { expandedIntervals = it },
++                intervalNames = intervalNames,
++                intervals = intervals,
++                onSave = {
++                    // ZAPISUJEMY ZMIANY DO MODELU I DO BAZY
++                    userSelection.visibilityMode = tempVisibilityMode
++                    userSelection.locationUpdateInterval = tempInterval
++
++                    FirebaseService.updateFullProfile(
++                        user = userSelection,
++                        onSuccess = {
++                            Toast.makeText(context, "Zapisano ustawienia!", Toast.LENGTH_SHORT)
++                                .show()
++                            showSettingsDialog = false
++                        },
++                        onError = {
++                            Toast.makeText(context, "Błąd zapisu", Toast.LENGTH_SHORT).show()
++                        }
++                    )
++                },
++                onCancel = { showSettingsDialog = false }
++            )
++        }
++    }
++}
++
+Index: app/src/main/java/pl/example/connectnear/AppNavigation.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/AppNavigation.kt b/app/src/main/java/pl/example/connectnear/AppNavigation.kt
+--- a/app/src/main/java/pl/example/connectnear/AppNavigation.kt
++++ b/app/src/main/java/pl/example/connectnear/AppNavigation.kt
+@@ -5,8 +5,10 @@
+ import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.ui.Modifier
+ import androidx.navigation.NavHostController
++import androidx.navigation.NavType
+ import androidx.navigation.compose.NavHost
+ import androidx.navigation.compose.composable
++import androidx.navigation.navArgument
+ 
+ @Composable
+ fun AppNavigation(
+@@ -25,18 +27,22 @@
+             )
+         }
+ 
+-        // --- 1. LOGOWANIE / REJESTRACJA ---
++        // --- 1. LOGOWANIE / AUTO-START ---
+         composable("auth_screen") {
+-            // A. Automatyczne logowanie
++
++            // A. Automatyczne logowanie + NAPRAWA DANYCH PO AKTUALIZACJI
+             LaunchedEffect(Unit) {
+                 if (FirebaseService.auth.currentUser != null) {
+                     FirebaseService.getCurrentUserProfile { userProfile ->
+                         if (userProfile != null) {
+-                            // Przepisujemy dane
++                            // 1. Przepisujemy dane z bazy do aplikacji
++                            // (Jeśli w bazie brakowało np. "searchRadiusKm", ProfileRepo wstawiło tam domyślne 50.0)
+                             userSelection.userId = userProfile.userId
+                             userSelection.name = userProfile.name
+                             userSelection.customId = userProfile.customId
+                             userSelection.category = userProfile.category
++                            userSelection.subCategory = userProfile.subCategory
++                            userSelection.interests = userProfile.interests
+                             userSelection.profileImageUrl = userProfile.profileImageUrl
+                             userSelection.description = userProfile.description
+                             userSelection.locationUpdateInterval = userProfile.locationUpdateInterval
+@@ -44,18 +50,30 @@
+                             userSelection.preferredAge = userProfile.preferredAge
+                             userSelection.mySex = userProfile.mySex
+                             userSelection.preferredSex = userProfile.preferredSex
++
+                             userSelection.instagramLink = userProfile.instagramLink
+                             userSelection.facebookLink = userProfile.facebookLink
+                             userSelection.tiktokLink = userProfile.tiktokLink
+                             userSelection.messengerLink = userProfile.messengerLink
+                             userSelection.youtubeSongLink = userProfile.youtubeSongLink
+                             userSelection.youtubeStartTime = userProfile.youtubeStartTime
++
+                             userSelection.visibilityMode = userProfile.visibilityMode
++                            userSelection.searchRadiusKm = userProfile.searchRadiusKm
++                            userSelection.shareLocation = userProfile.shareLocation
+ 
++                            // 2. --- KLUCZOWY MOMENT AKTUALIZACJI ---
++                            // Od razu zapisujemy ten stan z powrotem do Firebase.
++                            // Dzięki temu, jeśli stary użytkownik nie miał pola "searchRadiusKm",
++                            // teraz zostanie ono utworzone w bazie z wartością domyślną.
++                            FirebaseService.saveCurrentUser(userSelection) {}
++
++                            // 3. Idziemy do aplikacji
+                             navController.navigate("second_stage") {
+                                 popUpTo("auth_screen") { inclusive = true }
+                             }
+                         } else {
++                            // Jest sesja, ale brak profilu
+                             userSelection.userId = FirebaseService.auth.currentUser!!.uid
+                             navController.navigate("login_info_screen")
+                         }
+@@ -63,21 +81,17 @@
+                 }
+             }
+ 
+-            // B. Widok logowania
+             AuthScreen(
+                 onLoginSuccess = {
+                     FirebaseService.getCurrentUserProfile { userProfile ->
+-                        // Tutaj również można by dodać pełne przepisywanie danych jak wyżej,
+-                        // ale dla uproszczenia po prostu nawigujemy, a MainActivity/UserSelection
+-                        // i tak się odświeży przy ponownym wejściu.
+-                        // Dla pewności w AuthScreen lepiej byłoby wywołać logikę pobrania.
++                        // Po ręcznym logowaniu też idziemy dalej
+                         navController.navigate("second_stage")
+                     }
+                 }
+             )
+         }
+ 
+-        // --- 1.5. UZUPEŁNIANIE PROFILU ---
++        // --- 1.5. UZUPEŁNIANIE DANYCH ---
+         composable("login_info_screen") {
+             LoginInfoScreen(
+                 initialName = userSelection.name,
+@@ -92,7 +106,7 @@
+             )
+         }
+ 
+-        // --- 2. WYBÓR KATEGORII ---
++        // --- 2. KATEGORIA ---
+         composable("second_stage") {
+             SecondStage(
+                 modifier = Modifier.fillMaxSize(),
+@@ -144,48 +158,73 @@
+                 userSelection = userSelection,
+                 onBackClick = { navController.popBackStack() },
+                 onChatClick = { otherUserId, otherUserName ->
+-                    navController.navigate("chat_screen/$otherUserId/$otherUserName")
++                    navController.navigate("chat_screen/$otherUserId/$otherUserName?isGroup=false")
+                 },
+                 onProfileClick = { navController.navigate("profile_screen") },
+                 onOtherUserProfileClick = { targetUserId -> navController.navigate("user_profile_screen/$targetUserId") },
+-                onFriendsListClick = { navController.navigate("friends_list_screen") }
++                onFriendsListClick = { navController.navigate("friends_list_screen") },
++                onGroupsClick = { navController.navigate("groups_screen") }
+             )
+         }
+ 
+-        // --- 5. EKRANY DODATKOWE ---
++        // --- 5. LISTA ZNAJOMYCH ---
+         composable("friends_list_screen") {
+             FriendsListScreen(
+                 myUserId = userSelection.userId,
+                 onBackClick = { navController.popBackStack() },
+                 onChatClick = { friendId, friendName ->
+-                    navController.navigate("chat_screen/$friendId/$friendName")
++                    navController.navigate("chat_screen/$friendId/$friendName?isGroup=false")
++                }
++            )
++        }
++
++        // --- 6. LISTA GRUP ---
++        composable("groups_screen") {
++            GroupsScreen(
++                myUserId = userSelection.userId,
++                onBackClick = { navController.popBackStack() },
++                onGroupClick = { groupId, groupName ->
++                    navController.navigate("chat_screen/$groupId/$groupName?isGroup=true")
+                 }
+             )
+         }
+ 
++        // --- 7. PROFIL INNEJ OSOBY ---
+         composable("user_profile_screen/{targetUserId}") { backStackEntry ->
+             val targetUserId = backStackEntry.arguments?.getString("targetUserId") ?: ""
+             UserProfileScreen(
+                 targetUserId = targetUserId,
+                 onBackClick = { navController.popBackStack() },
+                 onChatClick = { userId, userName ->
+-                    navController.navigate("chat_screen/$userId/$userName")
++                    navController.navigate("chat_screen/$userId/$userName?isGroup=false")
+                 }
+             )
+         }
+ 
+-        composable("chat_screen/{userId}/{userName}") { backStackEntry ->
++        // --- 8. CZAT ---
++        composable(
++            route = "chat_screen/{userId}/{userName}?isGroup={isGroup}",
++            arguments = listOf(
++                navArgument("userId") { type = NavType.StringType },
++                navArgument("userName") { type = NavType.StringType },
++                navArgument("isGroup") { type = NavType.BoolType; defaultValue = false }
++            )
++        ) { backStackEntry ->
+             val otherUserId = backStackEntry.arguments?.getString("userId") ?: ""
+             val otherUserName = backStackEntry.arguments?.getString("userName") ?: ""
++            val isGroup = backStackEntry.arguments?.getBoolean("isGroup") ?: false
++
+             ChatScreen(
+                 myUserId = userSelection.userId,
+                 myUserName = userSelection.name,
+                 otherUserId = otherUserId,
+                 otherUserName = otherUserName,
++                isGroup = isGroup,
+                 onBackClick = { navController.popBackStack() }
+             )
+         }
+ 
++        // --- 9. MÓJ PROFIL ---
+         composable("profile_screen") {
+             ProfileScreen(
+                 userSelection = userSelection,
+Index: app/src/main/java/pl/example/connectnear/UserSelection.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/UserSelection.kt b/app/src/main/java/pl/example/connectnear/UserSelection.kt
+--- a/app/src/main/java/pl/example/connectnear/UserSelection.kt
++++ b/app/src/main/java/pl/example/connectnear/UserSelection.kt
+@@ -2,11 +2,10 @@
+ 
+ import com.google.firebase.firestore.GeoPoint
+ 
+-// Klasa danych użytkownika (Model)
+ data class UserSelection(
+     var userId: String = "",
+     var customId: String = "",
+-    var name: String = "",    var category: String = "",
++    var name: String = "",var category: String = "",
+     var myAge: String = "",
+     var preferredAge: String = "",
+     var mySex: String = "",
+@@ -25,5 +24,6 @@
+     var youtubeStartTime: Int = 0,
+ 
+     // Ustawienia
+-    var visibilityMode: String = "public" // "public" lub "friends"
++    var visibilityMode: String = "public", // "public" lub "friends"
++    var searchRadiusKm: Double = 50.0 // Domyślnie 50 km
+ )
+Index: app/src/main/java/pl/example/connectnear/LoginInfoScreen.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/LoginInfoScreen.kt b/app/src/main/java/pl/example/connectnear/LoginInfoScreen.kt
+--- a/app/src/main/java/pl/example/connectnear/LoginInfoScreen.kt
++++ b/app/src/main/java/pl/example/connectnear/LoginInfoScreen.kt
+@@ -11,6 +11,7 @@
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.graphics.Brush
+ import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ 
+@@ -32,27 +33,47 @@
+         horizontalAlignment = Alignment.CenterHorizontally,
+         verticalArrangement = Arrangement.Center
+     ) {
+-        Text("Jak się nazywasz?", fontSize = 28.sp, color = Color.White, modifier = Modifier.padding(bottom = 10.dp))
+-        Text("Ten nick musi być unikalny.", fontSize = 14.sp, color = Color.White.copy(alpha = 0.8f), modifier = Modifier.padding(bottom = 30.dp))
++        Text(
++            text = "Jak się nazywasz?",
++            fontSize = 28.sp,
++            color = Color.White,
++            fontWeight = FontWeight.Bold,
++            modifier = Modifier.padding(bottom = 10.dp)
++        )
++        Text(
++            text = "Ten nick musi być unikalny i będzie widoczny dla innych.",
++            fontSize = 14.sp,
++            color = Color.White.copy(alpha = 0.8f),
++            modifier = Modifier.padding(bottom = 30.dp)
++        )
+ 
+         OutlinedTextField(
+             value = name,
+             onValueChange = {
++                // Czyścimy błąd, gdy użytkownik zaczyna pisać
++                if (errorMessage.isNotEmpty()) errorMessage = ""
+                 name = it
+-                errorMessage = "" // Czyść błąd przy pisaniu
+             },
+             label = { Text("Twój Nick") },
+             singleLine = true,
+             isError = errorMessage.isNotEmpty(),
+             colors = OutlinedTextFieldDefaults.colors(
+                 focusedContainerColor = Color.White.copy(alpha = 0.2f),
+-                unfocusedContainerColor = Color.White.copy(alpha = 0.2f)
++                unfocusedContainerColor = Color.White.copy(alpha = 0.2f),
++                focusedBorderColor = Color.White,
++                unfocusedBorderColor = Color.LightGray,
++                focusedTextColor = Color.White,
++                unfocusedTextColor = Color.White
+             ),
+             modifier = Modifier.fillMaxWidth()
+         )
+ 
+         if (errorMessage.isNotEmpty()) {
+-            Text(errorMessage, color = Color.Red, modifier = Modifier.padding(top = 8.dp))
++            Text(
++                text = errorMessage,
++                color = MaterialTheme.colorScheme.error,
++                modifier = Modifier.padding(top = 8.dp)
++            )
+         }
+ 
+         Spacer(modifier = Modifier.height(32.dp))
+@@ -62,23 +83,30 @@
+         } else {
+             Button(
+                 onClick = {
+-                    if (name.isNotBlank()) {
+-                        isLoading = true
+-                        val finalName = name.trim()
++                    val finalName = name.trim()
+ 
+-                        // --- SPRAWDZAMY CZY NICK WOLNY ---
+-                        FirebaseService.checkIfNameExists(finalName) { exists ->
++                    // 1. Sprawdzenie długości
++                    if (finalName.length < 3) {
++                        errorMessage = "Nick musi mieć co najmniej 3 znaki."
++                        return@Button
++                    }
++
++                    isLoading = true
++
++                    // 2. Sprawdzenie unikalności w Firebase
++                    FirebaseService.checkIfNameExists(finalName) { exists ->
++                        if (exists) {
++                            // Nick zajęty
+                             isLoading = false
+-                            if (exists) {
+-                                errorMessage = "Ten nick jest już zajęty! Wybierz inny."
+-                            } else {
+-                                // Nick wolny -> Idziemy dalej
+-                                onNextClick(finalName, finalName)
+-                            }
++                            errorMessage = "Ten nick jest już zajęty! Wybierz inny."
++                        } else {
++                            // Nick wolny -> Zapisujemy i idziemy dalej
++                            isLoading = false
++                            onNextClick(finalName, finalName)
+                         }
+                     }
+                 },
+-                enabled = name.isNotBlank(),
++                enabled = name.isNotBlank() && !isLoading,
+                 modifier = Modifier.fillMaxWidth().height(50.dp),
+                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF006400))
+             ) {
+Index: app/src/main/java/pl/example/connectnear/FourthStage.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/FourthStage.kt b/app/src/main/java/pl/example/connectnear/FourthStage.kt
+--- a/app/src/main/java/pl/example/connectnear/FourthStage.kt
++++ b/app/src/main/java/pl/example/connectnear/FourthStage.kt
+@@ -2,20 +2,22 @@
+ 
+ import android.Manifest
+ import android.content.pm.PackageManager
++import android.util.Log
+ import android.widget.Toast
+ import androidx.activity.compose.rememberLauncherForActivityResult
+ import androidx.activity.result.contract.ActivityResultContracts
+-import androidx.compose.foundation.clickable
+-import androidx.compose.foundation.layout.*
+-import androidx.compose.material3.*
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.padding
++import androidx.compose.material3.SnackbarDuration
++import androidx.compose.material3.SnackbarHost
++import androidx.compose.material3.SnackbarHostState
+ import androidx.compose.runtime.*
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+-import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.platform.LocalContext
+-import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
+ import androidx.core.content.ContextCompat
+ import com.google.android.gms.location.LocationServices
+@@ -33,7 +35,8 @@
+     onChatClick: (String, String) -> Unit,
+     onProfileClick: () -> Unit,
+     onOtherUserProfileClick: (String) -> Unit,
+-    onFriendsListClick: () -> Unit
++    onFriendsListClick: () -> Unit,
++    onGroupsClick: () -> Unit
+ ) {
+     val context = LocalContext.current
+     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+@@ -45,21 +48,17 @@
+     var otherUsers by remember { mutableStateOf<List<FoundUser>>(emptyList()) }
+     var selectedUser by remember { mutableStateOf<FoundUser?>(null) }
+ 
+-    // --- STANY UI (DIALOGI) ---
++    // --- STANY UI ---
+     var showFriendRequestDialog by remember { mutableStateOf(false) }
+     var requestSenderName by remember { mutableStateOf("") }
+     var requestSenderId by remember { mutableStateOf("") }
+-
+-    // Stan okna ustawień
+     var showSettingsDialog by remember { mutableStateOf(false) }
+ 
+-    // Tymczasowe stany do edycji ustawień (zanim klikniemy "Zapisz")
+-    var tempVisibilityMode by remember { mutableStateOf(userSelection.visibilityMode) }
+-    var tempInterval by remember { mutableStateOf(userSelection.locationUpdateInterval) }
+-    var expandedIntervals by remember { mutableStateOf(false) }
+-
+-    // Opcje czasu GPS
++    // --- LISTY OPCJI ---
++    // Dodano 1s i 5s zgodnie z prośbą
+     val intervals = mapOf(
++        "1s" to 1000L,
++        "5s" to 5000L,
+         "30s" to 30000L,
+         "1m" to 60000L,
+         "5m" to 300000L,
+@@ -68,6 +67,9 @@
+     )
+     val intervalNames = intervals.entries.associate { (k, v) -> v to k }
+ 
++    // Opcje promienia
++    val radiuses = listOf(5.0, 10.0, 25.0, 50.0, 100.0, 150.0, 200.0, 250.0)
++
+     // --- 1. POWIADOMIENIA ---
+     LaunchedEffect(userSelection.userId) {
+         if (userSelection.userId.isNotEmpty()) {
+@@ -90,44 +92,79 @@
+         }
+     }
+ 
+-    // --- 2. GPS LOGIKA ---
+-    var hasPermission by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) }
+-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+-        hasPermission = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
++    // --- 2. GPS LOGIKA (POPRAWIONA) ---
++    var hasPermission by remember {
++        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED)
+     }
++
++    val permissionLauncher = rememberLauncherForActivityResult(
++        contract = ActivityResultContracts.RequestMultiplePermissions(),
++        onResult = { permissions ->
++            hasPermission = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
++                    permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
++        }
++    )
+ 
+-    LaunchedEffect(Unit) { if (!hasPermission) permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)) }
++    // Pytamy o zgodę tylko raz przy starcie, jeśli jej nie ma
++    LaunchedEffect(Unit) {
++        if (!hasPermission) {
++            permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
++        }
++    }
+ 
+-    // Pętla GPS (reaguje na zmianę userSelection.locationUpdateInterval po zapisie ustawień)
+-    LaunchedEffect(userSelection.locationUpdateInterval, hasPermission) {
++    // Pętla odświeżania GPS
++    LaunchedEffect(userSelection.locationUpdateInterval, hasPermission, userSelection.shareLocation) {
+         if (hasPermission) {
+             while (isActive) {
+                 try {
++                    Log.d("GPS_TEST", "⏳ Cykl GPS: ${userSelection.locationUpdateInterval}ms")
++
+                     fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+                         if (location != null) {
+                             myLocation = LatLng(location.latitude, location.longitude)
++                            // Aktualizujemy lokalnie (żeby widzieć siebie na mapie)
+                             userSelection.location = GeoPoint(location.latitude, location.longitude)
+-                            FirebaseService.saveCurrentUser(userSelection) { FirebaseService.findMatches(userSelection) { otherUsers = it } }
++
++                            // Jeśli udostępnianie jest włączone -> Zapisz i Szukaj
++                            if (userSelection.shareLocation) {
++                                FirebaseService.saveCurrentUser(userSelection) {
++                                    FirebaseService.findMatches(userSelection) { otherUsers = it }
++                                }
++                            } else {
++                                // Jeśli udostępnianie wyłączone (Tryb Ducha) -> Tylko Szukaj
++                                Log.d("GPS_TEST", "👻 Tryb Ducha - nie wysyłam pozycji")
++                                FirebaseService.findMatches(userSelection) { otherUsers = it }
++                            }
+                         } else {
++                            // Fallback (wymuszenie)
+                             fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).addOnSuccessListener { l ->
+                                 if (l != null) {
+                                     myLocation = LatLng(l.latitude, l.longitude)
+                                     userSelection.location = GeoPoint(l.latitude, l.longitude)
+-                                    FirebaseService.saveCurrentUser(userSelection) { FirebaseService.findMatches(userSelection) { otherUsers = it } }
++
++                                    if (userSelection.shareLocation) {
++                                        FirebaseService.saveCurrentUser(userSelection) {
++                                            FirebaseService.findMatches(userSelection) { otherUsers = it }
++                                        }
++                                    } else {
++                                        FirebaseService.findMatches(userSelection) { otherUsers = it }
++                                    }
+                                 }
+                             }
+                         }
+                     }
+-                } catch (e: SecurityException) { }
++                } catch (e: SecurityException) {
++                    Log.e("GPS_TEST", "Błąd: ${e.message}")
++                }
+                 delay(userSelection.locationUpdateInterval)
+             }
+         }
+     }
+ 
+-    // --- 3. BUDOWANIE EKRANU ---
++    // --- 3. SKŁADANIE UI ---
+     Box(modifier = Modifier.fillMaxSize()) {
+ 
+-        // A. MAPA (z FourthStageComponents.kt)
++        // A. MAPA
+         FourthStageMap(
+             myLocation = myLocation,
+             otherUsers = otherUsers,
+@@ -137,21 +174,18 @@
+             onPermissionRequest = { permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)) }
+         )
+ 
+-        // B. POWIADOMIENIA (SNACKBAR)
++        // B. POWIADOMIENIA
+         SnackbarHost(hostState = snackbarHostState, modifier = Modifier.align(Alignment.TopCenter).padding(top = 50.dp))
+ 
+         // C. PRZYCISK USTAWIEŃ (Zębatka)
+         FourthStageSettingsFab(onClick = {
+-            // Pobieramy aktualne ustawienia do zmiennych tymczasowych przed otwarciem okna
+-            tempVisibilityMode = userSelection.visibilityMode
+-            tempInterval = userSelection.locationUpdateInterval
+             showSettingsDialog = true
+         })
+ 
+-        // D. DOLNY PANEL STEROWANIA (z FourthStageControls.kt)
++        // D. DOLNY PANEL STEROWANIA
+         FourthStageControls(
+             selectedUser = selectedUser,
+-            currentRefreshRate = userSelection.locationUpdateInterval, // Pokazuje aktualny czas
++            currentRefreshRate = userSelection.locationUpdateInterval,
+             onChatClick = { selectedUser?.let { onChatClick(it.userId, it.name) } },
+             onSendRequestClick = {
+                 selectedUser?.let {
+@@ -164,10 +198,11 @@
+             onCloseUserClick = { selectedUser = null },
+             onExitClick = onBackClick,
+             onFriendsListClick = onFriendsListClick,
++            onGroupsClick = onGroupsClick,
+             onMyProfileClick = onProfileClick
+         )
+ 
+-        // E. OKNO DIALOGOWE ZAPROSZENIA
++        // E. DIALOG ZAPROSZENIA
+         if (showFriendRequestDialog) {
+             FourthStageFriendRequestDialog(
+                 senderName = requestSenderName,
+@@ -181,34 +216,70 @@
+             )
+         }
+ 
+-        // F. OKNO DIALOGOWE USTAWIEŃ (Publiczny/Znajomi + Czas GPS)
++        // F. DIALOG USTAWIEŃ Z AUTO-ZAPISEM
+         if (showSettingsDialog) {
++            // Lokalne stany dla dropdownów
++            var expandedCategory by remember { mutableStateOf(false) }
++            var expandedIntervals by remember { mutableStateOf(false) }
++            var expandedRadius by remember { mutableStateOf(false) }
++
+             FourthStageSettingsDialog(
+-                tempVisibilityMode = tempVisibilityMode,
+-                onVisibilityChange = { tempVisibilityMode = it },
+-                tempInterval = tempInterval,
+-                onIntervalChange = { tempInterval = it },
++                // --- UDOSTĘPNIANIE LOKALIZACJI ---
++                isSharingLocation = userSelection.shareLocation,
++                onSharingChange = { isSharing ->
++                    userSelection.shareLocation = isSharing
++                    FirebaseService.updateFullProfile(userSelection, {
++                        val status = if(isSharing) "Jesteś widoczny" else "Tryb Ducha (Ukryty)"
++                        Toast.makeText(context, status, Toast.LENGTH_SHORT).show()
++                        // Odśwież mapę
++                        FirebaseService.findMatches(userSelection) { otherUsers = it }
++                    }, {})
++                },
++
++                // --- KATEGORIA ---
++                tempCategory = userSelection.category,
++                onCategoryChange = { newCat ->
++                    userSelection.category = newCat
++                    FirebaseService.updateFullProfile(userSelection, {
++                        Toast.makeText(context, "Zmieniono kategorię!", Toast.LENGTH_SHORT).show()
++                        FirebaseService.findMatches(userSelection) { otherUsers = it }
++                    }, {})
++                },
++                expandedCategory = expandedCategory,
++                onExpandedCategoryChange = { expandedCategory = it },
++
++                // --- WIDOCZNOŚĆ ---
++                tempVisibilityMode = userSelection.visibilityMode,
++                onVisibilityChange = { newMode ->
++                    userSelection.visibilityMode = newMode
++                    FirebaseService.updateFullProfile(userSelection, {}, {})
++                },
++
++                // --- CZAS GPS ---
++                tempInterval = userSelection.locationUpdateInterval,
++                onIntervalChange = { newInterval ->
++                    userSelection.locationUpdateInterval = newInterval
++                    FirebaseService.updateFullProfile(userSelection, {}, {})
++                },
+                 expandedIntervals = expandedIntervals,
+                 onExpandedChange = { expandedIntervals = it },
+                 intervalNames = intervalNames,
+                 intervals = intervals,
+-                onSave = {
+-                    // ZAPISUJEMY ZMIANY DO MODELU I DO BAZY
+-                    userSelection.visibilityMode = tempVisibilityMode
+-                    userSelection.locationUpdateInterval = tempInterval
+ 
+-                    FirebaseService.updateFullProfile(
+-                        user = userSelection,
+-                        onSuccess = {
+-                            Toast.makeText(context, "Zapisano ustawienia!", Toast.LENGTH_SHORT).show()
+-                            showSettingsDialog = false
+-                        },
+-                        onError = {
+-                            Toast.makeText(context, "Błąd zapisu", Toast.LENGTH_SHORT).show()
+-                        }
+-                    )
++                // --- PROMIEŃ ---
++                tempRadius = userSelection.searchRadiusKm,
++                onRadiusChange = { newRadius ->
++                    userSelection.searchRadiusKm = newRadius
++                    FirebaseService.updateFullProfile(userSelection, {
++                        FirebaseService.findMatches(userSelection) { otherUsers = it }
++                    }, {})
+                 },
+-                onCancel = { showSettingsDialog = false }
++                expandedRadius = expandedRadius,
++                onExpandedRadiusChange = { expandedRadius = it },
++                radiuses = radiuses,
++
++                // ZAMKNIĘCIE
++                onClose = { showSettingsDialog = false }
+             )
+         }
+     }
+Index: app/src/main/java/pl/example/connectnear/ChatRep.kt
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/ChatRep.kt b/app/src/main/java/pl/example/connectnear/ChatRep.kt
+deleted file mode 100644
+--- a/app/src/main/java/pl/example/connectnear/ChatRep.kt
++++ /dev/null
+@@ -1,62 +0,0 @@
+-package pl.example.connectnear
+-
+-import android.net.Uri
+-import com.google.firebase.firestore.FirebaseFirestore
+-import com.google.firebase.firestore.Query
+-import com.google.firebase.storage.FirebaseStorage
+-import java.util.UUID
+-
+-object ChatRepo {
+-    private val db = FirebaseFirestore.getInstance()
+-    private val storage = FirebaseStorage.getInstance()
+-
+-    fun getChatId(user1: String, user2: String): String = if (user1 < user2) "${user1}_$user2" else "${user2}_$user1"
+-
+-    fun sendMessage(chatId: String, message: ChatMessage, receiverId: String, senderName: String) {
+-        db.collection("chats").document(chatId).collection("messages").add(message)
+-        val notif = hashMapOf(
+-            "type" to "message",
+-            "senderName" to senderName,
+-            "senderId" to message.senderId,
+-            "text" to (if(message.text.isNotEmpty()) message.text else "Plik"),
+-            "read" to false,
+-            "timestamp" to System.currentTimeMillis()
+-        )
+-        db.collection("users").document(receiverId).collection("notifications").add(notif)
+-    }
+-
+-    fun getMessages(chatId: String, onUpdate: (List<ChatMessage>) -> Unit) {
+-        db.collection("chats").document(chatId).collection("messages")
+-            .orderBy("timestamp", Query.Direction.ASCENDING)
+-            .addSnapshotListener { v, _ ->
+-                onUpdate(v?.toObjects(ChatMessage::class.java) ?: emptyList())
+-            }
+-    }
+-
+-    fun uploadFileToStorage(uri: Uri, folder: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+-        val filename = "${UUID.randomUUID()}"
+-        val ref = storage.reference.child("$folder/$filename")
+-        ref.putFile(uri).continueWithTask { task ->
+-            if (!task.isSuccessful) task.exception?.let { throw it }
+-            ref.downloadUrl
+-        }.addOnCompleteListener { task ->
+-            if (task.isSuccessful) onSuccess(task.result.toString()) else onError(task.exception?.message ?: "")
+-        }
+-    }
+-
+-    fun listenForNotifications(myUserId: String, onNewNotification: (Map<String, Any>) -> Unit) {
+-        db.collection("users").document(myUserId).collection("notifications")
+-            .whereEqualTo("read", false)
+-            .addSnapshotListener { snapshots, e ->
+-                if (e != null) return@addSnapshotListener
+-                for (dc in snapshots!!.documentChanges) {
+-                    if (dc.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
+-                        val data = dc.document.data.toMutableMap()
+-                        data["id"] = dc.document.id
+-                        onNewNotification(data)
+-                        db.collection("users").document(myUserId).collection("notifications").document(dc.document.id).update("read", true)
+-                    }
+-                }
+-            }
+-    }
+-}
+Index: app/src/main/java/pl/example/connectnear/FourthStageComponents.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/FourthStageComponents.kt b/app/src/main/java/pl/example/connectnear/FourthStageComponents.kt
+--- a/app/src/main/java/pl/example/connectnear/FourthStageComponents.kt
++++ b/app/src/main/java/pl/example/connectnear/FourthStageComponents.kt
+@@ -1,163 +1,525 @@
+ package pl.example.connectnear
+ 
+-import androidx.compose.foundation.clickable
+-import androidx.compose.foundation.layout.*
+-import androidx.compose.material.icons.Icons
+-import androidx.compose.material.icons.filled.Settings
+-import androidx.compose.material3.*
+-import androidx.compose.runtime.Composable
+-import androidx.compose.ui.Alignment
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.graphics.Color
+-import androidx.compose.ui.text.font.FontWeight
+-import androidx.compose.ui.unit.dp
+-import com.google.android.gms.maps.model.BitmapDescriptorFactory
+-import com.google.android.gms.maps.model.CameraPosition
+-import com.google.android.gms.maps.model.LatLng
+-import com.google.maps.android.compose.*
++import android.Manifest
++import android.content.pm.PackageManager
++import android.util.Log
++import android.widget.Toast
++import androidx.activity.compose.rememberLauncherForActivityResult
++import androidx.activity.result.contract.ActivityResultContracts
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.padding
++import androidx.compose.material3.SnackbarDuration
++import androidx.compose.material3.SnackbarHost
++import androidx.compose.material3.SnackbarHostState
++import androidx.compose.runtime.*
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.platform.LocalContext
++import androidx.compose.ui.unit.dp
++import androidx.core.content.ContextCompat
++import com.google.android.gms.location.LocationServices
++import com.google.android.gms.location.Priority
++import com.google.android.gms.maps.model.LatLng
++import com.google.firebase.firestore.GeoPoint
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.isActive
++import kotlinx.coroutines.launch
++
++@Composable
++fun FourthStage(
++    userSelection: UserSelection,
++    onBackClick: () -> Unit,
++    onChatClick: (String, String) -> Unit,
++    onProfileClick: () -> Unit,
++    onOtherUserProfileClick: (String) -> Unit,
++    onFriendsListClick: () -> Unit,
++    onGroupsClick: () -> Unit
++) {
++    val context = LocalContext.current
++    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
++    val scope = rememberCoroutineScope()
++    val snackbarHostState = remember { SnackbarHostState() }
++
++    // --- STANY DANYCH ---
++    var myLocation by remember { mutableStateOf<LatLng?>(null) }
++    var otherUsers by remember { mutableStateOf<List<FoundUser>>(emptyList()) }
++    var selectedUser by remember { mutableStateOf<FoundUser?>(null) }
++
++    // --- STANY UI ---
++    var showFriendRequestDialog by remember { mutableStateOf(false) }
++    var requestSenderName by remember { mutableStateOf("") }
++    var requestSenderId by remember { mutableStateOf("") }
++    var showSettingsDialog by remember { mutableStateOf(false) }
++
++    // --- LISTY OPCJI ---
++    // Dodano 1s i 5s zgodnie z prośbą
++    val intervals = mapOf(
++        "1s" to 1000L,
++        "5s" to 5000L,
++        "30s" to 30000L,
++        "1m" to 60000L,
++        "5m" to 300000L,
++        "30m" to 1800000L,
++        "1h" to 3600000L
++    )
++    val intervalNames = intervals.entries.associate { (k, v) -> v to k }
++
++    // Opcje promienia
++    val radiuses = listOf(5.0, 10.0, 25.0, 50.0, 100.0, 150.0, 200.0, 250.0)
++
++    // --- 1. POWIADOMIENIA ---
++    LaunchedEffect(userSelection.userId) {
++        if (userSelection.userId.isNotEmpty()) {
++            FirebaseService.listenForNotifications(userSelection.userId) { data ->
++                val type = data["type"] as? String ?: "message"
++                val senderName = data["senderName"] as? String ?: "Ktoś"
++                val text = data["text"] as? String ?: ""
++                val senderId = data["senderId"] as? String ?: ""
++
++                if (type == "friend_request") {
++                    requestSenderName = senderName
++                    requestSenderId = senderId
++                    showFriendRequestDialog = true
++                } else {
++                    scope.launch {
++                        snackbarHostState.showSnackbar("$senderName: $text", duration = SnackbarDuration.Short, withDismissAction = true)
++                    }
++                }
++            }
++        }
++    }
++
++    // --- 2. GPS LOGIKA (POPRAWIONA) ---
++    var hasPermission by remember {
++        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED)
++    }
++
++    val permissionLauncher = rememberLauncherForActivityResult(
++        contract = ActivityResultContracts.RequestMultiplePermissions(),
++        onResult = { permissions ->
++            hasPermission = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
++                    permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
++        }
++    )
++
++    // Pytamy o zgodę tylko raz przy starcie, jeśli jej nie ma
++    LaunchedEffect(Unit) {
++        if (!hasPermission) {
++            permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
++        }
++    }
++
++    // Pętla odświeżania GPS
++    LaunchedEffect(userSelection.locationUpdateInterval, hasPermission, userSelection.shareLocation) {
++        if (hasPermission) {
++            while (isActive) {
++                try {
++                    Log.d("GPS_TEST", "⏳ Cykl GPS: ${userSelection.locationUpdateInterval}ms")
++
++                    fusedLocationClient.lastLocation.addOnSuccessListener { location ->
++                        if (location != null) {
++                            myLocation = LatLng(location.latitude, location.longitude)
++                            // Aktualizujemy lokalnie (żeby widzieć siebie na mapie)
++                            userSelection.location = GeoPoint(location.latitude, location.longitude)
++
++                            // Jeśli udostępnianie jest włączone -> Zapisz i Szukaj
++                            if (userSelection.shareLocation) {
++                                FirebaseService.saveCurrentUser(userSelection) {
++                                    FirebaseService.findMatches(userSelection) { otherUsers = it }
++                                }
++                            } else {
++                                // Jeśli udostępnianie wyłączone (Tryb Ducha) -> Tylko Szukaj
++                                Log.d("GPS_TEST", "👻 Tryb Ducha - nie wysyłam pozycji")
++                                FirebaseService.findMatches(userSelection) { otherUsers = it }
++                            }
++                        } else {
++                            // Fallback (wymuszenie)
++                            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).addOnSuccessListener { l ->
++                                if (l != null) {
++                                    myLocation = LatLng(l.latitude, l.longitude)
++                                    userSelection.location = GeoPoint(l.latitude, l.longitude)
++
++                                    if (userSelection.shareLocation) {
++                                        FirebaseService.saveCurrentUser(userSelection) {
++                                            FirebaseService.findMatches(userSelection) { otherUsers = it }
++                                        }
++                                    } else {
++                                        FirebaseService.findMatches(userSelection) { otherUsers = it }
++                                    }
++                                }
++                            }
++                        }
++                    }
++                } catch (e: SecurityException) {
++                    Log.e("GPS_TEST", "Błąd: ${e.message}")
++                }
++                delay(userSelection.locationUpdateInterval)
++            }
++        }
++    }
++
++    // --- 3. SKŁADANIE UI ---
++    Box(modifier = Modifier.fillMaxSize()) {
++
++        // A. MAPA
++        FourthStageMap(
++            myLocation = myLocation,
++            otherUsers = otherUsers,
++            onMapClick = { selectedUser = null },
++            onUserMarkerClick = { selectedUser = it },
++            hasPermission = hasPermission,
++            onPermissionRequest = { permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)) }
++        )
++
++        // B. POWIADOMIENIA
++        SnackbarHost(hostState = snackbarHostState, modifier = Modifier.align(Alignment.TopCenter).padding(top = 50.dp))
++
++        // C. PRZYCISK USTAWIEŃ (Zębatka)
++        FourthStageSettingsFab(onClick = {
++            showSettingsDialog = true
++        })
++
++        // D. DOLNY PANEL STEROWANIA
++        FourthStageControls(
++            selectedUser = selectedUser,
++            currentRefreshRate = userSelection.locationUpdateInterval,
++            onChatClick = { selectedUser?.let { onChatClick(it.userId, it.name) } },
++            onSendRequestClick = {
++                selectedUser?.let {
++                    FirebaseService.sendFriendRequest(userSelection.userId, userSelection.name, it.userId,
++                        { Toast.makeText(context, "Wysłano!", Toast.LENGTH_SHORT).show() },
++                        { Toast.makeText(context, "Błąd", Toast.LENGTH_SHORT).show() })
++                }
++            },
++            onOtherProfileClick = { selectedUser?.let { onOtherUserProfileClick(it.userId) } },
++            onCloseUserClick = { selectedUser = null },
++            onExitClick = onBackClick,
++            onFriendsListClick = onFriendsListClick,
++            onGroupsClick = onGroupsClick,
++            onMyProfileClick = onProfileClick
++        )
++
++        // E. DIALOG ZAPROSZENIA
++        if (showFriendRequestDialog) {
++            FourthStageFriendRequestDialog(
++                senderName = requestSenderName,
++                onAccept = {
++                    FirebaseService.acceptFriendRequest(userSelection.userId, requestSenderId, requestSenderName) {
++                        Toast.makeText(context, "Dodano!", Toast.LENGTH_SHORT).show()
++                        showFriendRequestDialog = false
++                    }
++                },
++                onReject = { showFriendRequestDialog = false }
++            )
++        }
++
++        // F. DIALOG USTAWIEŃ Z AUTO-ZAPISEM
++        if (showSettingsDialog) {
++            // Lokalne stany dla dropdownów
++            var expandedCategory by remember { mutableStateOf(false) }
++            var expandedIntervals by remember { mutableStateOf(false) }
++            var expandedRadius by remember { mutableStateOf(false) }
++
++            FourthStageSettingsDialog(
++                // --- UDOSTĘPNIANIE LOKALIZACJI ---
++                isSharingLocation = userSelection.shareLocation,
++                onSharingChange = { isSharing ->
++                    userSelection.shareLocation = isSharing
++                    FirebaseService.updateFullProfile(userSelection, {
++                        val status = if(isSharing) "Jesteś widoczny" else "Tryb Ducha (Ukryty)"
++                        Toast.makeText(context, status, Toast.LENGTH_SHORT).show()
++                        // Odśwież mapę
++                        FirebaseService.findMatches(userSelection) { otherUsers = it }
++                    }, {})
++                },
++
++                // --- KATEGORIA ---
++                tempCategory = userSelection.category,
++                onCategoryChange = { newCat ->
++                    userSelection.category = newCat
++                    FirebaseService.updateFullProfile(userSelection, {
++                        Toast.makeText(context, "Zmieniono kategorię!", Toast.LENGTH_SHORT).show()
++                        FirebaseService.findMatches(userSelection) { otherUsers = it }
++                    }, {})
++                },
++                expandedCategory = expandedCategory,
++                onExpandedCategoryChange = { expandedCategory = it },
++
++                // --- WIDOCZNOŚĆ ---
++                tempVisibilityMode = userSelection.visibilityMode,
++                onVisibilityChange = { newMode ->
++                    userSelection.visibilityMode = newMode
++                    FirebaseService.updateFullProfile(userSelection, {}, {})
++                },
++
++                // --- CZAS GPS ---
++                tempInterval = userSelection.locationUpdateInterval,
++                onIntervalChange = { newInterval ->
++                    userSelection.locationUpdateInterval = newInterval
++                    FirebaseService.updateFullProfile(userSelection, {}, {})
++                    package pl.example.connectnear
++
++                    import androidx.compose.foundation.clickable
++                            import androidx.compose.foundation.layout.*
++                            import androidx.compose.material.icons.Icons
++                            import androidx.compose.material.icons.filled.Settings
++                            import androidx.compose.material3.*
++                            import androidx.compose.runtime.Composable
++                            import androidx.compose.ui.Alignment
++                            import androidx.compose.ui.Modifier
++                            import androidx.compose.ui.graphics.Color
++                            import androidx.compose.ui.text.font.FontWeight
++                            import androidx.compose.ui.unit.dp
++                            import androidx.compose.ui.unit.sp
++                            import com.google.android.gms.maps.model.BitmapDescriptorFactory
++                            import com.google.android.gms.maps.model.CameraPosition
++                            import com.google.android.gms.maps.model.LatLng
++                            import com.google.maps.android.compose.*
+ 
+-// --- 1. MAPA ---
+-@Composable
+-fun FourthStageMap(
+-    myLocation: LatLng?,
+-    otherUsers: List<FoundUser>,
+-    onMapClick: () -> Unit,
+-    onUserMarkerClick: (FoundUser) -> Unit,
+-    hasPermission: Boolean,
+-    onPermissionRequest: () -> Unit
+-) {
+-    if (myLocation != null) {
+-        val cameraPositionState = rememberCameraPositionState {
+-            position = CameraPosition.fromLatLngZoom(myLocation, 14f)
+-        }
+-        GoogleMap(
+-            modifier = Modifier.fillMaxSize(),
+-            cameraPositionState = cameraPositionState,
+-            properties = MapProperties(isMyLocationEnabled = true),
+-            onMapClick = { onMapClick() }
+-        ) {
+-            otherUsers.forEach { user ->
+-                Marker(
+-                    state = MarkerState(position = LatLng(user.location.latitude, user.location.longitude)),
+-                    title = user.name,
+-                    snippet = user.category,
+-                    icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE),
+-                    onClick = {
+-                        onUserMarkerClick(user)
+-                        false
+-                    }
+-                )
+-            }
+-        }
+-    } else {
+-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+-            if (!hasPermission) {
+-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+-                    Text("Brak uprawnień GPS", color = Color.Red)
+-                    Button(onClick = onPermissionRequest) { Text("Nadaj uprawnienia") }
+-                }
+-            } else {
+-                CircularProgressIndicator()
+-                Text("Szukam GPS...", modifier = Modifier.padding(top = 40.dp))
+-            }
+-        }
+-    }
+-}
++                            // --- 1. MAPA ---
++                            @Composable
++                            fun FourthStageMap(
++                                myLocation: LatLng?,
++                                otherUsers: List<FoundUser>,
++                                onMapClick: () -> Unit,
++                                onUserMarkerClick: (FoundUser) -> Unit,
++                                hasPermission: Boolean,
++                                onPermissionRequest: () -> Unit
++                            ) {
++                                if (myLocation != null) {
++                                    val cameraPositionState = rememberCameraPositionState {
++                                        position = CameraPosition.fromLatLngZoom(myLocation, 14f)
++                                    }
++                                    GoogleMap(
++                                        modifier = Modifier.fillMaxSize(),
++                                        cameraPositionState = cameraPositionState,
++                                        properties = MapProperties(isMyLocationEnabled = true),
++                                        onMapClick = { onMapClick() }
++                                    ) {
++                                        otherUsers.forEach { user ->
++                                            Marker(
++                                                state = MarkerState(position = LatLng(user.location.latitude, user.location.longitude)),
++                                                title = user.name,
++                                                snippet = user.category,
++                                                icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE),
++                                                onClick = {
++                                                    onUserMarkerClick(user)
++                                                    false
++                                                }
++                                            )
++                                        }
++                                    }
++                                } else {
++                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
++                                        if (!hasPermission) {
++                                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
++                                                Text("Brak uprawnień GPS", color = Color.Red)
++                                                Button(onClick = onPermissionRequest) { Text("Nadaj uprawnienia") }
++                                            }
++                                        } else {
++                                            CircularProgressIndicator()
++                                            Text("Szukam GPS...", modifier = Modifier.padding(top = 40.dp))
++                                        }
++                                    }
++                                }
++                            }
+ 
+-// --- 2. PRZYCISK USTAWIEŃ (FAB) ---
+-@Composable
+-fun FourthStageSettingsFab(
+-    onClick: () -> Unit
+-) {
+-    Box(
+-        modifier = Modifier
+-            .fillMaxSize()
+-            .padding(top = 40.dp, end = 16.dp),
+-        contentAlignment = Alignment.TopEnd
+-    ) {
+-        FloatingActionButton(
+-            onClick = onClick,
+-            containerColor = Color.White,
+-            contentColor = Color.Black
+-        ) {
+-            Icon(Icons.Default.Settings, contentDescription = "Ustawienia mapy")
+-        }
+-    }
+-}
++                    // --- 2. PRZYCISK USTAWIEŃ (FAB) ---
++                    @Composable
++                    fun FourthStageSettingsFab(
++                        onClick: () -> Unit
++                    ) {
++                        Box(
++                            modifier = Modifier
++                                .fillMaxSize()
++                                .padding(top = 40.dp, end = 16.dp),
++                            contentAlignment = Alignment.TopEnd
++                        ) {
++                            FloatingActionButton(
++                                onClick = onClick,
++                                containerColor = Color.White,
++                                contentColor = Color.Black
++                            ) {
++                                Icon(Icons.Default.Settings, contentDescription = "Ustawienia mapy")
++                            }
++                        }
++                    }
+ 
+-// --- 3. DIALOG ZAPROSZENIA ---
+-@Composable
+-fun FourthStageFriendRequestDialog(
+-    senderName: String,
+-    onAccept: () -> Unit,
+-    onReject: () -> Unit
+-) {
+-    AlertDialog(
+-        onDismissRequest = { },
+-        title = { Text("Zaproszenie do znajomych") },
+-        text = { Text("Użytkownik $senderName chce dodać Cię do znajomych.") },
+-        confirmButton = {
+-            Button(
+-                onClick = onAccept,
+-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00C853))
+-            ) { Text("Akceptuj") }
+-        },
+-        dismissButton = {
+-            Button(
+-                onClick = onReject,
+-                colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+-            ) { Text("Odrzuć") }
+-        }
+-    )
+-}
++                    // --- 3. DIALOG ZAPROSZENIA ---
++                    @Composable
++                    fun FourthStageFriendRequestDialog(
++                        senderName: String,
++                        onAccept: () -> Unit,
++                        onReject: () -> Unit
++                    ) {
++                        AlertDialog(
++                            onDismissRequest = { },
++                            title = { Text("Zaproszenie do znajomych") },
++                            text = { Text("Użytkownik $senderName chce dodać Cię do znajomych.") },
++                            confirmButton = {
++                                Button(
++                                    onClick = onAccept,
++                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00C853))
++                                ) { Text("Akceptuj") }
++                            },
++                            dismissButton = {
++                                Button(
++                                    onClick = onReject,
++                                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
++                                ) { Text("Odrzuć") }
++                            }
++                        )
++                    }
+ 
+-// --- 4. DIALOG USTAWIEŃ ---
+-@Composable
+-fun FourthStageSettingsDialog(
+-    tempVisibilityMode: String,
+-    onVisibilityChange: (String) -> Unit,
+-    tempInterval: Long,
+-    onIntervalChange: (Long) -> Unit,
+-    expandedIntervals: Boolean,
+-    onExpandedChange: (Boolean) -> Unit,
+-    intervalNames: Map<Long, String>,
+-    intervals: Map<String, Long>,
+-    onSave: () -> Unit,
+-    onCancel: () -> Unit
+-) {
+-    AlertDialog(
+-        onDismissRequest = onCancel,
+-        title = { Text("Ustawienia Mapy") },
+-        text = {
+-            Column {
+-                Text("Widoczność:", fontWeight = FontWeight.Bold)
+-                Row(verticalAlignment = Alignment.CenterVertically) {
+-                    RadioButton(selected = tempVisibilityMode == "public", onClick = { onVisibilityChange("public") })
+-                    Text("Wszyscy", modifier = Modifier.clickable { onVisibilityChange("public") })
+-                }
+-                Row(verticalAlignment = Alignment.CenterVertically) {
+-                    RadioButton(selected = tempVisibilityMode == "friends", onClick = { onVisibilityChange("friends") })
+-                    Text("Tylko Znajomi", modifier = Modifier.clickable { onVisibilityChange("friends") })
+-                }
+-                Spacer(modifier = Modifier.height(16.dp))
+-                Text("Odświeżanie GPS:", fontWeight = FontWeight.Bold)
+-                Box {
+-                    Button(onClick = { onExpandedChange(true) }, colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray)) {
+-                        Text(intervalNames[tempInterval] ?: "Wybierz", color = Color.Black)
+-                    }
+-                    DropdownMenu(expanded = expandedIntervals, onDismissRequest = { onExpandedChange(false) }) {
+-                        intervals.forEach { (l, v) ->
+-                            DropdownMenuItem(text = { Text(l) }, onClick = { onIntervalChange(v); onExpandedChange(false) })
+-                        }
+-                    }
+-                }
+-            }
+-        },
+-        confirmButton = {
+-            Button(onClick = onSave) { Text("Zapisz") }
+-        },
+-        dismissButton = {
+-            Button(onClick = onCancel, colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) { Text("Anuluj") }
+-        }
+-    )
+-}
++                    // --- 4. DIALOG USTAWIEŃ (Z LOKALIZACJĄ) ---
++                    @Composable
++                    fun FourthStageSettingsDialog(
++                        // NOWE: WŁĄCZANIE/WYŁĄCZANIE LOKALIZACJI
++                        isSharingLocation: Boolean,
++                        onSharingChange: (Boolean) -> Unit,
++
++                        // KATEGORIA
++                        tempCategory: String,
++                        onCategoryChange: (String) -> Unit,
++                        expandedCategory: Boolean,
++                        onExpandedCategoryChange: (Boolean) -> Unit,
++
++                        // WIDOCZNOŚĆ
++                        tempVisibilityMode: String,
++                        onVisibilityChange: (String) -> Unit,
++
++                        // CZAS GPS
++                        tempInterval: Long,
++                        onIntervalChange: (Long) -> Unit,
++                        expandedIntervals: Boolean,
++                        onExpandedChange: (Boolean) -> Unit,
++                        intervalNames: Map<Long, String>,
++                        intervals: Map<String, Long>,
++
++                        // PROMIEŃ
++                        tempRadius: Double,
++                        onRadiusChange: (Double) -> Unit,
++                        expandedRadius: Boolean,
++                        onExpandedRadiusChange: (Boolean) -> Unit,
++                        radiuses: List<Double>,
++
++                        onClose: () -> Unit
++                    ) {
++                        val categories = listOf("Impreza", "Sport", "Podwójne randki", "Kawa", "Spacer", "Wspólna gra")
++
++                        AlertDialog(
++                            onDismissRequest = onClose,
++                            title = { Text("Szybkie Ustawienia") },
++                            text = {
++                                Column {
++                                    // --- PRZEŁĄCZNIK: WIDOCZNOŚĆ NA MAPIE ---
++                                    Row(
++                                        modifier = Modifier.fillMaxWidth(),
++                                        verticalAlignment = Alignment.CenterVertically,
++                                        horizontalArrangement = Arrangement.SpaceBetween
++                                    ) {
++                                        Text("Udostępniaj lokalizację:", fontWeight = FontWeight.Bold)
++                                        Switch(
++                                            checked = isSharingLocation,
++                                            onCheckedChange = {
++                                                onSharingChange(it) // Auto-zapis
++                                            }
++                                        )
++                                    }
++                                    Text(
++                                        text = if(isSharingLocation) "Jesteś widoczny na mapie" else "Jesteś niewidoczny (Tryb Ducha)",
++                                        fontSize = 12.sp,
++                                        color = if(isSharingLocation) Color(0xFF006400) else Color.Red
++                                    )
++
++                                    Divider(modifier = Modifier.padding(vertical = 12.dp))
++
++                                    // --- KATEGORIA ---
++                                    Text("Moja Kategoria:", fontWeight = FontWeight.Bold)
++                                    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
++                                        Button(
++                                            onClick = { onExpandedCategoryChange(true) },
++                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0AA4F4)),
++                                            modifier = Modifier.fillMaxWidth(),
++                                            enabled = isSharingLocation // Blokujemy zmianę jak wyłączone
++                                        ) {
++                                            Text(
++                                                text = if (tempCategory.isEmpty()) "Wybierz kategorię" else tempCategory,
++                                                color = Color.White
++                                            )
++                                        }
++                                        DropdownMenu(
++                                            expanded = expandedCategory,
++                                            onDismissRequest = { onExpandedCategoryChange(false) }
++                                        ) {
++                                            categories.forEach { cat ->
++                                                DropdownMenuItem(
++                                                    text = { Text(cat) },
++                                                    onClick = {
++                                                        onCategoryChange(cat)
++                                                        onExpandedCategoryChange(false)
++                                                    }
++                                                )
++                                            }
++                                            DropdownMenuItem(
++                                                text = { Text("Bez kategorii") },
++                                                onClick = { onCategoryChange(""); onExpandedCategoryChange(false) }
++                                            )
++                                        }
++                                    }
++
++                                    // --- WIDOCZNOŚĆ ---
++                                    Text("Kto może mnie widzieć?", fontWeight = FontWeight.Bold)
++                                    Row(verticalAlignment = Alignment.CenterVertically) {
++                                        RadioButton(selected = tempVisibilityMode == "public", onClick = { onVisibilityChange("public") }, enabled = isSharingLocation)
++                                        Text("Wszyscy", modifier = Modifier.clickable { if(isSharingLocation) onVisibilityChange("public") }, color = if(isSharingLocation) Color.Black else Color.Gray)
++
++                                        Spacer(modifier = Modifier.width(10.dp))
++
++                                        RadioButton(selected = tempVisibilityMode == "friends", onClick = { onVisibilityChange("friends") }, enabled = isSharingLocation)
++                                        Text("Znajomi", modifier = Modifier.clickable { if(isSharingLocation) onVisibilityChange("friends") }, color = if(isSharingLocation) Color.Black else Color.Gray)
++                                    }
++
++                                    Spacer(modifier = Modifier.height(8.dp))
++
++                                    // --- PROMIEŃ ---
++                                    Text("Promień wyszukiwania:", fontWeight = FontWeight.Bold)
++                                    Box {
++                                        Button(onClick = { onExpandedRadiusChange(true) }, colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray)) {
++                                            Text("${tempRadius.toInt()} km", color = Color.Black)
++                                        }
++                                        DropdownMenu(expanded = expandedRadius, onDismissRequest = { onExpandedRadiusChange(false) }) {
++                                            radiuses.forEach { radius ->
++                                                DropdownMenuItem(
++                                                    text = { Text("${radius.toInt()} km") },
++                                                    onClick = { onRadiusChange(radius); onExpandedRadiusChange(false) }
++                                                )
++                                            }
++                                        }
++                                    }
++
++                                    Spacer(modifier = Modifier.height(8.dp))
++
++                                    // --- CZAS GPS ---
++                                    Text("Odświeżanie GPS:", fontWeight = FontWeight.Bold)
++                                    Box {
++                                        Button(onClick = { onExpandedChange(true) }, colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray), enabled = isSharingLocation) {
++                                            Text(intervalNames[tempInterval] ?: "Wybierz", color = if(isSharingLocation) Color.Black else Color.Gray)
++                                        }
++                                        DropdownMenu(expanded = expandedIntervals, onDismissRequest = { onExpandedChange(false) }) {
++                                            intervals.forEach { (l, v) ->
++                                                DropdownMenuItem(text = { Text(l) }, onClick = { onIntervalChange(v); onExpandedChange(false) })
++                                            }
++                                        }
++                                    }
++                                }
++                            },
++                            confirmButton = {
++                                Button(onClick = onClose) { Text("Zamknij") }
++                            }
++                        )
++                    }
++

@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">ConnectNear</string>
+    <string name="default_web_client_id">TODO</string>
+
+    <!-- Facebook Login -->
+    <string name="facebook_app_id">TODO</string>
+    <string name="facebook_client_token">TODO</string>
+    <string name="fb_login_protocol_scheme">fbTODO</string>
+</resources>

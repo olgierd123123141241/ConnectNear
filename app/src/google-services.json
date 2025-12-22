@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "438952007650",
+    "project_id": "connectnear-fda9c",
+    "storage_bucket": "connectnear-fda9c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:438952007650:android:cacb1cb1bb21ca098e4bbb",
+        "android_client_info": {
+          "package_name": "pl.example.connectnear"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "438952007650-87cvp2o73ra4l03vpt9tpe1l1c0mqb57.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "pl.example.connectnear",
+            "certificate_hash": "ef408d5b2dc5422dd1a9eb656a3acb917455c4dd"
+          }
+        },
+        {
+          "client_id": "438952007650-ffqnqoupo2kis68rakl0sc8u2usdbrt2.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBxaluq1HswCoMX3jZWPoqym-Pp2r4Rzvg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "438952007650-ffqnqoupo2kis68rakl0sc8u2usdbrt2.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
