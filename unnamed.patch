@@ -1,0 +1,3280 @@
+Index: app/src/main/java/pl/example/connectnear/Models.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/Models.kt b/app/src/main/java/pl/example/connectnear/Models.kt
+--- a/app/src/main/java/pl/example/connectnear/Models.kt
++++ b/app/src/main/java/pl/example/connectnear/Models.kt
+@@ -31,3 +31,16 @@
+     val fileName: String = "",
+     val timestamp: Long = 0
+ )
++
++data class Group(
++    val groupId: String = "",
++    val name: String = "",
++    val ownerId: String = "",
++    val memberIds: List<String> = emptyList(),
++    val lastMessage: String = "",
++    val timestamp: Long = 0,
++
++    // --- NOWE POLA ---
++    val isPublic: Boolean = false, // Czy grupa jest publiczna?
++    val pendingRequests: List<String> = emptyList() // Lista ID osób czekających na akceptację
++)
+Index: app/src/main/java/pl/example/connectnear/MapRepo.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/MapRepo.kt b/app/src/main/java/pl/example/connectnear/MapRepo.kt
+--- a/app/src/main/java/pl/example/connectnear/MapRepo.kt
++++ b/app/src/main/java/pl/example/connectnear/MapRepo.kt
+@@ -2,119 +2,127 @@
+ 
+ import android.util.Log
+ import com.google.firebase.firestore.FirebaseFirestore
++import com.google.firebase.firestore.Query
+ import kotlin.math.*
+ 
+ object MapRepo {
+     private val db = FirebaseFirestore.getInstance()
+ 
+-    // Wklej to do MapRepo.kt (lub FirebaseService.kt) zamiast obecnej funkcji findMatches
+-
+-    fun findMatches(mySelection: UserSelection, radiusKm: Double = 40000.0, onResult: (List<FoundUser>) -> Unit) {
++    fun findMatches(mySelection: UserSelection, onResult: (List<FoundUser>) -> Unit) {
+         if (mySelection.location == null) { onResult(emptyList()); return }
+ 
+-        // Debugowanie: Sprawdźmy w logach, co dokładnie aplikacja "myśli", że chcesz znaleźć
+-        Log.d("FILTR_DEBUG", "Szukam: '${mySelection.preferredSex}' (Kategoria: '${mySelection.category}')")
++        val radiusKm = mySelection.searchRadiusKm
++        val myId = AuthRepo.getCurrentUserId() ?: ""
+ 
+-        val myId = AuthRepo.getCurrentUserId() ?: "" // Lub auth.currentUser?.uid
++        // Czas aktywności: Pobieramy tylko userów, którzy wysłali sygnał w ciągu ostatnich 3 minut.
++        // To drastycznie tnie koszty - nie pobierasz tysięcy nieaktywnych kont.
++        val activeThreshold = 3 * 60 * 1000
++        val cutoffTime = System.currentTimeMillis() - activeThreshold
+ 
+-        // 1. Pobierz listę znajomych
+-        db.collection("users").document(myId).collection("friends").get().addOnSuccessListener { friendDocs ->
+-            val myFriendIds = friendDocs.map { it.id }.toSet()
++        // 1. Pobieramy znajomych (potrzebne do widoczności "Tylko Znajomi")
++        db.collection("users").document(myId).collection("friends").get()
++            .addOnSuccessListener { friendDocs ->
++                val myFriendIds = friendDocs.map { it.id }.toSet()
+ 
+-            // 2. Pobierz wszystkich użytkowników
+-            db.collection("users").get().addOnSuccessListener { documents ->
+-                val foundUsers = mutableListOf<FoundUser>()
++                // 2. BUDUJEMY ZAPYTANIE (Query) - To jest ta optymalizacja!
++                // Zamiast pobierać wszystkich, precyzujemy kogo chcemy.
++
++                var query: Query = db.collection("users")
++                    // WAŻNE: Pobierz tylko tych, co byli aktywni niedawno
++                    .whereGreaterThan("timestamp", cutoffTime)
++                    // WAŻNE: Pobierz tylko tych, co udostępniają lokalizację
++                    .whereEqualTo("shareLocation", true)
++
++                // --- Opcjonalne filtry po stronie serwera (redukcja kosztów) ---
++
++                // Filtr Kategorii (jeśli user ma wybraną)
++                if (mySelection.category.isNotEmpty()) {
++                    query = query.whereEqualTo("category", mySelection.category)
++                }
++
++                // Filtr Podkategorii (tylko dla Sportu)
++                if (mySelection.category == "Sport" && mySelection.subCategory.isNotEmpty()) {
++                    query = query.whereEqualTo("subCategory", mySelection.subCategory)
++                }
++
++                // Filtr Płci
++                // Uwaga: Działa tylko jeśli w bazie płeć jest zapisana tak samo jak w preferencjach (wielkość liter)
++                val prefSex = mySelection.preferredSex.trim()
++                if (prefSex.isNotEmpty() && !prefSex.equals("Wszyscy", ignoreCase = true) && !prefSex.equals("All", ignoreCase = true)) {
++                    // Jeśli szukasz konkretnej płci, dodaj to do zapytania
++                    // (Upewnij się, że w bazie masz np. "Mężczyzna" z dużej, jeśli tak tu wpisujesz)
++                    query = query.whereEqualTo("mySex", prefSex)
++                }
++
++                // 3. WYKONANIE ZAPYTANIA
++                query.get()
++                    .addOnSuccessListener { documents ->
++                        val foundUsers = mutableListOf<FoundUser>()
+ 
+-                for (document in documents) {
+-                    val otherUserId = document.id
+-                    if (otherUserId == myId) continue
+-
+-                    // Pobieramy dane i CZYŚCIMY je (trim = usuń spacje, lowercase = małe litery)
+-                    val otherSexRaw = document.getString("mySex") ?: ""
+-                    val otherSexClean = otherSexRaw.trim().lowercase()
+-
+-                    val myPrefClean = mySelection.preferredSex.trim().lowercase()
+-
+-                    // --- 1. PANCERNY FILTR PŁCI ---
+-                    val isGenderMatch = when {
+-                        // Jeśli szukasz "wszyscy", "all" lub pole jest puste -> pasuje każdy
+-                        myPrefClean == "wszyscy" || myPrefClean.isEmpty() -> true
+-
+-                        // Porównujemy po wyczyszczeniu (np. "mężczyzna" == "mężczyzna")
+-                        myPrefClean == "mężczyzna" -> otherSexClean == "mężczyzna"
+-                        myPrefClean == "kobieta" -> otherSexClean == "kobieta"
++                        for (document in documents) {
++                            val otherUserId = document.id
++                            if (otherUserId == myId) continue // Pomiń siebie
+ 
+-                        // Fallback: dokładne porównanie, jeśli to coś innego
+-                        else -> myPrefClean == otherSexClean
+-                    }
+-
+-                    // --- 2. FILTR KATEGORII ---
+-                    val otherCategory = document.getString("category") ?: ""
+-                    val isCategoryMatch = if (mySelection.category.isNotEmpty()) {
+-                        otherCategory == mySelection.category
+-                    } else {
+-                        true
+-                    }
+-
+-                    // LOGOWANIE ODRZUCONYCH (Pomoże Ci znaleźć błąd w Logcat)
+-                    if (!isGenderMatch) {
+-                        Log.d("FILTR_DEBUG", "Odrzucono: ${document.getString("name")} (Płeć w bazie: '$otherSexRaw', Szukasz: '${mySelection.preferredSex}')")
+-                        continue
+-                    }
+-                    if (!isCategoryMatch) continue
++                            // Reszta filtrowania (np. dystans, widoczność) musi odbyć się na telefonie,
++                            // bo Firestore nie obsługuje filtrowania po dystansie bez zewnętrznych bibliotek.
+ 
+-                    val loc = document.getGeoPoint("location")
+-                    if (loc != null) {
+-                        val dist = calculateDistance(
+-                            mySelection.location!!.latitude, mySelection.location!!.longitude,
+-                            loc.latitude, loc.longitude
+-                        )
++                            val loc = document.getGeoPoint("location")
++                            // Dodatkowe sprawdzenie kategorii (dla bezpieczeństwa wielkości liter itp.)
++                            // oraz widoczności
++
++                            if (loc != null) {
++                                val dist = calculateDistance(
++                                    mySelection.location!!.latitude, mySelection.location!!.longitude,
++                                    loc.latitude, loc.longitude
++                                )
+ 
+-                        if (dist <= radiusKm) {
+-                            // --- 3. FILTR WIDOCZNOŚCI ---
+-                            val otherVisibility = document.getString("visibilityMode") ?: "public"
+-                            val showUser = when (otherVisibility) {
+-                                "public" -> true
+-                                "friends" -> myFriendIds.contains(otherUserId)
+-                                else -> true
+-                            }
++                                if (dist <= radiusKm) {
++                                    // Sprawdzenie widoczności ("Tylko znajomi")
++                                    val otherVisibility = document.getString("visibilityMode") ?: "public"
++                                    val showUser = when (otherVisibility) {
++                                        "public" -> true
++                                        "friends" -> myFriendIds.contains(otherUserId)
++                                        else -> true
++                                    }
+ 
+-                            if (showUser) {
+-                                Log.d("FILTR_DEBUG", "ZAAKCEPTOWANO: ${document.getString("name")}")
+-                                foundUsers.add(FoundUser(
+-                                    userId = otherUserId,
+-                                    customId = document.getString("customId") ?: "",
+-                                    location = loc,
+-                                    name = document.getString("name") ?: "Nieznajomy",
+-                                    category = otherCategory,
+-                                    sex = otherSexRaw, // Zapisujemy oryginalną wartość do wyświetlania
+-                                    description = document.getString("description") ?: "",
+-                                    profileImageUrl = document.getString("profileImageUrl") ?: "",
+-                                    instagram = document.getString("instagram") ?: "",
+-                                    facebook = document.getString("facebook") ?: "",
+-                                    tiktok = document.getString("tiktok") ?: "",
+-                                    messenger = document.getString("messenger") ?: "",
+-                                    youtube = document.getString("youtube") ?: "",
+-                                    youtubeStartTime = document.getLong("youtubeStartTime")?.toInt() ?: 0,
+-                                    visibilityMode = otherVisibility
+-                                ))
+-                            }
+-                        }
+-                    }
+-                }
+-                onResult(foundUsers)
+-            }.addOnFailureListener { onResult(emptyList()) }
+-        }.addOnFailureListener { onResult(emptyList()) }
++                                    if (showUser) {
++                                        foundUsers.add(FoundUser(
++                                            userId = otherUserId,
++                                            customId = document.getString("customId") ?: "",
++                                            location = loc,
++                                            name = document.getString("name") ?: "Nieznajomy",
++                                            category = document.getString("category") ?: "",
++                                            sex = document.getString("mySex") ?: "",
++                                            description = document.getString("description") ?: "",
++                                            profileImageUrl = document.getString("profileImageUrl") ?: "",
++                                            instagram = document.getString("instagram") ?: "",
++                                            facebook = document.getString("facebook") ?: "",
++                                            tiktok = document.getString("tiktok") ?: "",
++                                            messenger = document.getString("messenger") ?: "",
++                                            youtube = document.getString("youtube") ?: "",
++                                            youtubeStartTime = document.getLong("youtubeStartTime")?.toInt() ?: 0,
++                                            visibilityMode = otherVisibility
++                                        ))
++                                    }
++                                }
++                            }
++                        }
++                        onResult(foundUsers)
++                    }
++                    .addOnFailureListener { e ->
++                        Log.e("MapRepo", "Błąd pobierania: ${e.message}")
++                        // Jeśli błąd to "FAILED_PRECONDITION", sprawdź Logcat pod kątem linku do utworzenia indeksu!
++                        onResult(emptyList())
++                    }
++            }
++            .addOnFailureListener { onResult(emptyList()) }
+     }
+-
+ 
+-    // Funkcja pomocnicza tylko dla tego pliku
+     private fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+         val r = 6371.0
+         val dLat = Math.toRadians(lat2 - lat1)
+         val dLon = Math.toRadians(lon2 - lon1)
+         val a = sin(dLat / 2) * sin(dLat / 2) + cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2) * sin(dLon / 2)
+-        val c = 2 * atan2(sqrt(a), sqrt(1 - a))
+-        return r * c
++        return r * 2 * atan2(sqrt(a), sqrt(1 - a))
+     }
+ }
+Index: app/src/main/java/pl/example/connectnear/AuthRepo.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/AuthRepo.kt b/app/src/main/java/pl/example/connectnear/AuthRepo.kt
+--- a/app/src/main/java/pl/example/connectnear/AuthRepo.kt
++++ b/app/src/main/java/pl/example/connectnear/AuthRepo.kt
+@@ -1,51 +1,65 @@
+ package pl.example.connectnear
+ 
+ import com.google.firebase.auth.FirebaseAuth
+-import pl.example.connectnear.FirebaseService.startNewSession
+ 
+-object AuthRepo {    private val auth = FirebaseAuth.getInstance()
++object AuthRepo {
++    private val auth = FirebaseAuth.getInstance()
++    val currentUser get() = auth.currentUser
+ 
+     fun signUp(email: String, pass: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+-        auth.signInWithEmailAndPassword(email, pass).addOnSuccessListener { authResult ->
+-            val userId = authResult.user?.uid
+-            if (userId != null) {
+-                // ZAMIAST OD RAZU onSuccess(), NAJPIERW USTAW SESJĘ:
+-                startNewSession(userId) {
+-                    onSuccess() // Dopiero teraz wpuść użytkownika
+-                }
+-            } else {
+-                onSuccess()
++        auth.createUserWithEmailAndPassword(email, pass)
++            .addOnSuccessListener {
++                // Po sukcesie wysyłamy e-mail weryfikacyjny (opcjonalnie, ale dobra praktyka)
++                it.user?.sendEmailVerification()
++                    ?.addOnSuccessListener {
++                        // WAŻNE: Wylogowujemy użytkownika od razu po rejestracji.
++                        // Musi on zalogować się ponownie, aby rozpocząć sesję.
++                        auth.signOut()
++                        onSuccess()
++                    }
++                    ?.addOnFailureListener { e ->
++                        onError("Konto utworzone, ale błąd wysyłania e-maila: ${e.message}")
++                    }
+             }
+-        }
+-            .addOnFailureListener { onError(it.message ?: "Błąd") }
++            .addOnFailureListener {
++                // Zwracamy czytelny komunikat błędu
++                val message = when {
++                    "email address is already in use" in (it.message ?: "") -> "Ten adres e-mail jest już zajęty!"
++                    "weak password" in (it.message ?: "") -> "Hasło jest zbyt słabe!"
++                    else -> it.message ?: "Nieznany błąd rejestracji."
++                }
++                onError(message)
++            }
+     }
+-
+ 
+     fun signIn(email: String, pass: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+-        auth.signInWithEmailAndPassword(email, pass).addOnSuccessListener { authResult ->
+-            val userId = authResult.user?.uid
+-            if (userId != null) {
+-                // ZAMIAST OD RAZU onSuccess(), NAJPIERW USTAW SESJĘ:
+-                startNewSession(userId) {
+-                    onSuccess() // Dopiero teraz wpuść użytkownika
+-                }
+-            } else {
++        auth.signInWithEmailAndPassword(email, pass)
++            .addOnSuccessListener {
++                // Po udanym zalogowaniu, logika w MainActivity/AppNavigation pobierze profil
+                 onSuccess()
+             }
+-        }
+-            .addOnFailureListener { onError(it.message ?: "Błąd") }
++            .addOnFailureListener {
++                val message = when {
++                    "INVALID_LOGIN_CREDENTIALS" in (it.message ?: "") -> "Nieprawidłowy e-mail lub hasło."
++                    else -> it.message ?: "Błąd logowania."
++                }
++                onError(message)
++            }
+     }
+ 
+-
+-    fun signOut() { auth.signOut() }
++    fun signOut() {
++        auth.signOut()
++    }
+ 
+     fun sendPasswordResetEmail(email: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+-        if (email.isBlank()) { onError("Wpisz e-mail."); return }
+-        auth.sendPasswordResetEmail(email).addOnSuccessListener { onSuccess() }
++        if (email.isBlank()) {
++            onError("Wpisz e-mail.")
++            return
++        }
++        auth.sendPasswordResetEmail(email)
++            .addOnSuccessListener { onSuccess() }
+             .addOnFailureListener { onError(it.message ?: "") }
+     }
+ 
+-    // Pomocnicze
+     fun getCurrentUserId(): String? = auth.currentUser?.uid
+-    val currentUser get() = auth.currentUser
+ }
+Index: app/src/main/java/pl/example/connectnear/ChatScreen.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/ChatScreen.kt b/app/src/main/java/pl/example/connectnear/ChatScreen.kt
+--- a/app/src/main/java/pl/example/connectnear/ChatScreen.kt
++++ b/app/src/main/java/pl/example/connectnear/ChatScreen.kt
+@@ -1,13 +1,15 @@
+ package pl.example.connectnear
+ 
+-import android.content.Intent
+ import android.net.Uri
+ import androidx.activity.compose.rememberLauncherForActivityResult
+ import androidx.activity.result.contract.ActivityResultContracts
+ import androidx.compose.foundation.background
++import androidx.compose.foundation.border
+ import androidx.compose.foundation.layout.*
+ import androidx.compose.foundation.lazy.LazyColumn
+ import androidx.compose.foundation.lazy.items
++import androidx.compose.foundation.lazy.rememberLazyListState
++import androidx.compose.foundation.shape.CircleShape
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.material.icons.Icons
+ import androidx.compose.material.icons.filled.Add
+@@ -19,6 +21,7 @@
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.draw.clip
++import androidx.compose.ui.graphics.Brush
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.layout.ContentScale
+ import androidx.compose.ui.platform.LocalContext
+@@ -30,114 +33,117 @@
+ @Composable
+ fun ChatScreen(
+     myUserId: String,
+-    myUserName: String, // <--- NOWY PARAMETR: Twoje imię
+-    otherUserId: String,
++    myUserName: String,
++    otherUserId: String, // Jeśli isGroup=true, to jest to groupId
+     otherUserName: String,
++    isGroup: Boolean = false, // Nowa flaga
+     onBackClick: () -> Unit
+ ) {
+-    if (myUserId.isEmpty() || otherUserId.isEmpty()) {
+-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+-                Text("Błąd czatu: Brak ID użytkownika.")
+-                Button(onClick = onBackClick, modifier = Modifier.padding(top = 20.dp)) { Text("Wróć") }
+-            }
+-        }
+-        return
+-    }
++    var messageText by remember { mutableStateOf("") }
++    var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
+ 
++    // Ustalanie ID czatu:
++    // - Dla grupy: ID grupy jest stałe i jest przekazane w 'otherUserId'.
++    // - Dla priv: ID jest kombinacją dwóch userów (zawsze takie samo dla tej pary).
++    val chatId = if (isGroup) otherUserId else FirebaseService.getChatId(myUserId, otherUserId)
++
++    val listState = rememberLazyListState()
+     val context = LocalContext.current
+-    val chatId = FirebaseService.getChatId(myUserId, otherUserId)
+-    var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
+-    var text by remember { mutableStateOf("") }
+-    var isUploading by remember { mutableStateOf(false) }
++
++    // Pobieranie wiadomości
++    LaunchedEffect(chatId) {
++        FirebaseService.getMessages(chatId) { newMessages ->
++            messages = newMessages
++        }
++    }
+ 
+-    // 1. ZDJĘCIA
+-    val imagePickerLauncher = rememberLauncherForActivityResult(
+-        contract = ActivityResultContracts.GetContent()
+-    ) { uri: Uri? ->
++    // Przewijanie na dół przy nowej wiadomości
++    LaunchedEffect(messages.size) {
++        if (messages.isNotEmpty()) {
++            listState.animateScrollToItem(messages.size - 1)
++        }
++    }
++
++    // Wysyłanie zdjęć
++    val imagePicker = rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri: Uri? ->
+         if (uri != null) {
+-            isUploading = true
+             FirebaseService.uploadFileToStorage(uri, "chat_images",
+-                onSuccess = { downloadUrl ->
+-                    val msg = ChatMessage(myUserId, text = "Wysłano zdjęcie", imageUrl = downloadUrl, timestamp = System.currentTimeMillis())
+-                    // TU UŻYWAMY MOJEGO IMIENIA ZAMIAST "Użytkownik"
+-                    FirebaseService.sendMessage(chatId, msg, otherUserId, myUserName)
+-                    isUploading = false
+-                },
+-                onError = { isUploading = false }
+-            )
+-        }
+-    }
+-
+-    // 2. PLIKI
+-    val filePickerLauncher = rememberLauncherForActivityResult(
+-        contract = ActivityResultContracts.GetContent()
+-    ) { uri: Uri? ->
+-        if (uri != null) {
+-            isUploading = true
+-            FirebaseService.uploadFileToStorage(uri, "chat_files",
+-                onSuccess = { downloadUrl ->
+-                    val fileName = uri.lastPathSegment ?: "plik"
+-                    val msg = ChatMessage(myUserId, text = "Wysłano plik", fileUrl = downloadUrl, fileName = fileName, timestamp = System.currentTimeMillis())
+-                    // TU UŻYWAMY MOJEGO IMIENIA ZAMIAST "Użytkownik"
+-                    FirebaseService.sendMessage(chatId, msg, otherUserId, myUserName)
+-                    isUploading = false
++                onSuccess = { url ->
++                    val msg = ChatMessage(
++                        senderId = myUserId,
++                        imageUrl = url,
++                        timestamp = System.currentTimeMillis()
++                    )
++                    // Przekazujemy isGroup do serwisu
++                    FirebaseService.sendMessage(chatId, msg, otherUserId, myUserName, isGroup)
+                 },
+-                onError = { isUploading = false }
++                onError = {}
+             )
+         }
+     }
+ 
+-    // Pobieranie wiadomości
+-    LaunchedEffect(chatId) {
+-        FirebaseService.getMessages(chatId) { msgs -> messages = msgs }
+-    }
+-
+-    Column(modifier = Modifier.fillMaxSize().background(Color(0xFFEFEFEF))) {
++    Column(
++        modifier = Modifier
++            .fillMaxSize()
++            .background(Brush.verticalGradient(colors = listOf(Color(0xFF0AA4F4), Color(0xFF1CD9C3))))
++    ) {
+         // Nagłówek
+         Row(
+-            modifier = Modifier.fillMaxWidth().background(Color(0xFF0AA4F4)).padding(16.dp),
++            modifier = Modifier
++                .fillMaxWidth()
++                .background(Color.White.copy(alpha = 0.2f))
++                .padding(16.dp),
+             verticalAlignment = Alignment.CenterVertically
+         ) {
+-            Button(onClick = onBackClick, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)) { Text("<") }
+-            Spacer(modifier = Modifier.width(10.dp))
+-            Text(otherUserName, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
++            Button(onClick = onBackClick, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)) {
++                Text("<")
++            }
++            Spacer(modifier = Modifier.width(16.dp))
++            Column {
++                Text(text = otherUserName, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
++                if (isGroup) {
++                    Text(text = "Czat grupowy", fontSize = 12.sp, color = Color.White.copy(0.8f))
++                }
++            }
+         }
+ 
+         // Lista wiadomości
+-        LazyColumn(modifier = Modifier.weight(1f).padding(8.dp), reverseLayout = true) {
+-            items(messages.reversed()) { msg ->
++        LazyColumn(
++            state = listState,
++            modifier = Modifier
++                .weight(1f)
++                .padding(horizontal = 8.dp),
++            contentPadding = PaddingValues(vertical = 8.dp)
++        ) {
++            items(messages) { msg ->
+                 val isMe = msg.senderId == myUserId
+-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = if (isMe) Alignment.CenterEnd else Alignment.CenterStart) {
++                Row(
++                    modifier = Modifier.fillMaxWidth(),
++                    horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start
++                ) {
+                     Card(
++                        shape = RoundedCornerShape(12.dp),
+                         colors = CardDefaults.cardColors(containerColor = if (isMe) Color(0xFFDCF8C6) else Color.White),
+-                        modifier = Modifier.padding(4.dp).widthIn(max = 280.dp)
++                        modifier = Modifier.padding(vertical = 4.dp).widthIn(max = 280.dp)
+                     ) {
+                         Column(modifier = Modifier.padding(8.dp)) {
++                            // Zdjęcie
+                             if (msg.imageUrl.isNotEmpty()) {
+                                 AsyncImage(
+                                     model = msg.imageUrl,
+-                                    contentDescription = "Zdjęcie",
+-                                    modifier = Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(8.dp)),
++                                    contentDescription = "Wysłane zdjęcie",
++                                    modifier = Modifier
++                                        .fillMaxWidth()
++                                        .height(200.dp)
++                                        .clip(RoundedCornerShape(8.dp)),
+                                     contentScale = ContentScale.Crop
+                                 )
+                                 Spacer(modifier = Modifier.height(4.dp))
+                             }
+-                            if (msg.fileUrl.isNotEmpty()) {
+-                                Button(
+-                                    onClick = {
+-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(msg.fileUrl))
+-                                        context.startActivity(intent)
+-                                    },
+-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEEEEEE), contentColor = Color.Black),
+-                                    modifier = Modifier.fillMaxWidth()
+-                                ) {
+-                                    Text("📄 ${msg.fileName.take(15)}...")
+-                                }
+-                                Spacer(modifier = Modifier.height(4.dp))
+-                            }
+-                            if (msg.text.isNotEmpty() && msg.text != "Wysłano zdjęcie" && msg.text != "Wysłano plik") {
+-                                Text(text = msg.text, color = Color.Black)
++
++                            // Tekst
++                            if (msg.text.isNotEmpty()) {
++                                Text(text = msg.text, color = Color.Black, fontSize = 16.sp)
+                             }
+                         }
+                     }
+@@ -145,31 +151,46 @@
+             }
+         }
+ 
+-        if (isUploading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
++        // Pole tekstowe
++        Row(
++            modifier = Modifier
++                .fillMaxWidth()
++                .padding(8.dp)
++                .background(Color.White, shape = RoundedCornerShape(30.dp))
++                .padding(horizontal = 8.dp, vertical = 4.dp),
++            verticalAlignment = Alignment.CenterVertically
++        ) {
++            IconButton(onClick = { imagePicker.launch("image/*") }) {
++                Icon(Icons.Default.Add, contentDescription = "Dodaj plik", tint = Color.Gray)
++            }
+ 
+-        Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+-            IconButton(onClick = { imagePickerLauncher.launch("image/*") }) { Icon(Icons.Default.Add, contentDescription = "Dodaj", tint = Color.Gray) }
+-            IconButton(onClick = { filePickerLauncher.launch("*/*") }) { Text("📎", fontSize = 20.sp) }
+             OutlinedTextField(
+-                value = text,
+-                onValueChange = { text = it },
++                value = messageText,
++                onValueChange = { messageText = it },
++                placeholder = { Text("Napisz wiadomość...") },
+                 modifier = Modifier.weight(1f),
+-                placeholder = { Text("Wpisz wiadomość...") },
+-                shape = RoundedCornerShape(24.dp),
+-                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Color.White, unfocusedContainerColor = Color.White)
++                colors = OutlinedTextFieldDefaults.colors(
++                    focusedContainerColor = Color.Transparent,
++                    unfocusedContainerColor = Color.Transparent,
++                    focusedBorderColor = Color.Transparent,
++                    unfocusedBorderColor = Color.Transparent
++                )
+             )
+-            IconButton(
+-                onClick = {
+-                    if (text.isNotBlank()) {
+-                        val msg = ChatMessage(myUserId, text, timestamp = System.currentTimeMillis())
+ 
+-                        // TU TEŻ ZMIANA: Przekazujemy myUserName
+-                        FirebaseService.sendMessage(chatId, msg, otherUserId, myUserName)
+-                        text = ""
+-                    }
+-                },
+-                enabled = text.isNotBlank() || isUploading
+-            ) { Icon(Icons.Default.Send, contentDescription = "Wyślij", tint = Color(0xFF0AA4F4)) }
++            IconButton(onClick = {
++                if (messageText.isNotBlank()) {
++                    val msg = ChatMessage(
++                        senderId = myUserId,
++                        text = messageText.trim(),
++                        timestamp = System.currentTimeMillis()
++                    )
++                    // Przekazujemy isGroup do serwisu
++                    FirebaseService.sendMessage(chatId, msg, otherUserId, myUserName, isGroup)
++                    messageText = ""
++                }
++            }) {
++                Icon(Icons.Default.Send, contentDescription = "Wyślij", tint = Color(0xFF006400))
++            }
+         }
+     }
+ }
+Index: app/src/main/java/pl/example/connectnear/ProfileRepo.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/ProfileRepo.kt b/app/src/main/java/pl/example/connectnear/ProfileRepo.kt
+--- a/app/src/main/java/pl/example/connectnear/ProfileRepo.kt
++++ b/app/src/main/java/pl/example/connectnear/ProfileRepo.kt
+@@ -2,16 +2,11 @@
+ 
+ import android.util.Log
+ import com.google.firebase.firestore.FirebaseFirestore
+-import pl.example.connectnear.FirebaseService.auth
+ 
+ object ProfileRepo {
+     private val db = FirebaseFirestore.getInstance()
+-
+-    // --- ZAPIS DANYCH ---
+-
+-    // Używane przy rejestracji i zmianie ustawień GPS/Widoczności
+     fun saveCurrentUser(userSelection: UserSelection, onSuccess: () -> Unit) {
+-        val userId = auth.currentUser?.uid ?: return
++        val userId = AuthRepo.getCurrentUserId() ?: return
+         userSelection.userId = userId
+ 
+         val userData = hashMapOf(
+@@ -20,21 +15,20 @@
+             "customId" to userSelection.customId,
+             "category" to userSelection.category,
+ 
+-            // Filtry (Wiek/Płeć) - MUSZĄ BYĆ ZAPISYWANE
++            // NOWE POLA
++            "subCategory" to userSelection.subCategory,
++            "interests" to userSelection.interests,
++
+             "myAge" to userSelection.myAge,
+             "preferredAge" to userSelection.preferredAge,
+             "mySex" to userSelection.mySex,
+             "preferredSex" to userSelection.preferredSex,
+-
+             "description" to userSelection.description,
+             "profileImageUrl" to userSelection.profileImageUrl,
+             "location" to userSelection.location,
+-
+-            // Ustawienia mapy - MUSZĄ BYĆ ZAPISYWANE
+             "locationUpdateInterval" to userSelection.locationUpdateInterval,
+-            "visibilityMode" to userSelection.visibilityMode,
++            "timestamp" to System.currentTimeMillis(),
+ 
+-            // Linki
+             "instagram" to userSelection.instagramLink,
+             "facebook" to userSelection.facebookLink,
+             "tiktok" to userSelection.tiktokLink,
+@@ -42,25 +36,31 @@
+             "youtube" to userSelection.youtubeSongLink,
+             "youtubeStartTime" to userSelection.youtubeStartTime,
+ 
+-            "timestamp" to System.currentTimeMillis()
++            "visibilityMode" to userSelection.visibilityMode,
++            "searchRadiusKm" to userSelection.searchRadiusKm,
++            "shareLocation" to userSelection.shareLocation
+         )
+ 
+         db.collection("users").document(userId).set(userData)
+             .addOnSuccessListener { onSuccess() }
+-            .addOnFailureListener { Log.e("Firebase", "Błąd: ${it.message}") }
++            .addOnFailureListener { Log.e("Firebase", "Błąd zapisu: ${it.message}") }
+     }
+ 
+-    // Używane w Profilu i w Oknie Ustawień na mapie
+     fun updateFullProfile(user: UserSelection, onSuccess: () -> Unit, onError: (String) -> Unit) {
+         val updates = mapOf(
+             "name" to user.name,
+             "customId" to user.name,
+             "description" to user.description,
++
++            // NOWE POLA
++            "subCategory" to user.subCategory,
++            "interests" to user.interests,
++
+             "profileImageUrl" to user.profileImageUrl,
+-
+-            // Aktualizujemy też ustawienia mapy!
+             "locationUpdateInterval" to user.locationUpdateInterval,
+             "visibilityMode" to user.visibilityMode,
++            "searchRadiusKm" to user.searchRadiusKm,
++            "shareLocation" to user.shareLocation,
+ 
+             "instagram" to user.instagramLink,
+             "facebook" to user.facebookLink,
+@@ -74,47 +74,46 @@
+             .addOnFailureListener { onError(it.message ?: "Błąd") }
+     }
+ 
+-    // --- ODCZYT DANYCH (To przywraca ustawienia po restarcie telefonu) ---
+-
+     fun getCurrentUserProfile(onSuccess: (UserSelection?) -> Unit) {
+-        val userId = auth.currentUser?.uid
++        val userId = AuthRepo.getCurrentUserId()
+         if (userId == null) { onSuccess(null); return }
+ 
+         db.collection("users").document(userId).get().addOnSuccessListener { document ->
+             if (document.exists() && !document.getString("name").isNullOrEmpty()) {
+-                // Tutaj przepisujemy dane z bazy z powrotem do aplikacji
+                 val user = UserSelection(
+                     userId = userId,
+                     name = document.getString("name") ?: "",
+                     customId = document.getString("customId") ?: "",
+                     category = document.getString("category") ?: "",
++
++                    // ODCZYT NOWYCH PÓL
++                    subCategory = document.getString("subCategory") ?: "",
++                    interests = document.getString("interests") ?: "",
++
+                     profileImageUrl = document.getString("profileImageUrl") ?: "",
+                     description = document.getString("description") ?: "",
+-
+-                    // Przywracamy ustawienia mapy
+                     locationUpdateInterval = document.getLong("locationUpdateInterval") ?: 60000L,
+-                    visibilityMode = document.getString("visibilityMode") ?: "public",
+-
+-                    // Przywracamy filtry
+                     myAge = document.getString("myAge") ?: "",
+                     preferredAge = document.getString("preferredAge") ?: "",
+                     mySex = document.getString("mySex") ?: "",
+-                    preferredSex = document.getString("preferredSex") ?: "Wszyscy",
++                    preferredSex = document.getString("preferredSex") ?: "",
+ 
+-                    // Przywracamy linki
+                     instagramLink = document.getString("instagram") ?: "",
+                     facebookLink = document.getString("facebook") ?: "",
+                     tiktokLink = document.getString("tiktok") ?: "",
+                     messengerLink = document.getString("messenger") ?: "",
+                     youtubeSongLink = document.getString("youtube") ?: "",
+-                    youtubeStartTime = document.getLong("youtubeStartTime")?.toInt() ?: 0
++                    youtubeStartTime = document.getLong("youtubeStartTime")?.toInt() ?: 0,
++
++                    visibilityMode = document.getString("visibilityMode") ?: "public",
++                    searchRadiusKm = document.getDouble("searchRadiusKm") ?: 50.0,
++                    shareLocation = document.getBoolean("shareLocation") ?: true
+                 )
+                 onSuccess(user)
+             } else { onSuccess(null) }
+         }.addOnFailureListener { onSuccess(null) }
+     }
+ 
+-
+     fun getUserDetails(userId: String, onSuccess: (UserSelection) -> Unit) {
+         db.collection("users").document(userId).get().addOnSuccessListener { document ->
+             if (document.exists()) {
+@@ -124,6 +123,11 @@
+                     description = document.getString("description") ?: "",
+                     profileImageUrl = document.getString("profileImageUrl") ?: "",
+                     category = document.getString("category") ?: "",
++
++                    // ODCZYT NOWYCH PÓL
++                    subCategory = document.getString("subCategory") ?: "",
++                    interests = document.getString("interests") ?: "",
++
+                     customId = document.getString("customId") ?: "",
+                     instagramLink = document.getString("instagram") ?: "",
+                     facebookLink = document.getString("facebook") ?: "",
+@@ -131,7 +135,8 @@
+                     messengerLink = document.getString("messenger") ?: "",
+                     youtubeSongLink = document.getString("youtube") ?: "",
+                     youtubeStartTime = document.getLong("youtubeStartTime")?.toInt() ?: 0,
+-                    visibilityMode = document.getString("visibilityMode") ?: "public"
++                    visibilityMode = document.getString("visibilityMode") ?: "public",
++                    shareLocation = document.getBoolean("shareLocation") ?: true
+                 ))
+             }
+         }
+Index: app/src/main/java/pl/example/connectnear/MainActivity.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/MainActivity.kt b/app/src/main/java/pl/example/connectnear/MainActivity.kt
+--- a/app/src/main/java/pl/example/connectnear/MainActivity.kt
++++ b/app/src/main/java/pl/example/connectnear/MainActivity.kt
+@@ -22,34 +22,31 @@
+         super.onCreate(savedInstanceState)
+         enableEdgeToEdge()
+ 
+-        // --- 1. URUCHAMIANIE USŁUGI W TLE ---
+-        // Startujemy usługę od razu, żeby lokalizacja działała po zminimalizowaniu.
+-        // Usługa sama sprawdzi, czy użytkownik jest zalogowany, zanim zacznie wysyłać dane.
++        // --- 1. URUCHAMIANIE USŁUGI LOKALIZACJI W TLE ---
+         startLocationService()
+ 
+         setContent {
+             ConnectNearTheme {
+                 Surface(modifier = Modifier.fillMaxSize()) {
+-                    // Inicjalizacja nawigacji i stanu użytkownika
++                    // Inicjalizacja nawigacji
+                     val navController = rememberNavController()
++                    // Globalny stan użytkownika
+                     val userSelection = remember { UserSelection() }
+                     val context = LocalContext.current
+ 
+                     // --- 2. GLOBALNY MONITOR SESJI ---
+-                    // Działa w tle UI i sprawdza, czy nikt inny się nie zalogował na to konto.
++                    // Sprawdza w tle, czy nikt nie zalogował się na innym telefonie
+                     LaunchedEffect(Unit) {
+                         while (true) {
+                             val currentUser = FirebaseService.auth.currentUser
++
+                             if (currentUser != null) {
+                                 FirebaseService.checkSessionValidity(
+                                     userId = currentUser.uid,
+                                     onInvalid = {
+-                                        // ALARM: Ktoś zalogował się gdzie indziej!
+-
+-                                        // Najważniejsze: Zatrzymaj wysyłanie lokalizacji tego telefonu
++                                        // Ktoś inny się zalogował -> Wyloguj stąd
+                                         stopLocationService()
+-
+-                                        FirebaseService.signOut() // Wyloguj lokalnie
++                                        FirebaseService.signOut()
+ 
+                                         Toast.makeText(
+                                             context,
+@@ -57,23 +54,21 @@
+                                             Toast.LENGTH_LONG
+                                         ).show()
+ 
+-                                        // Wróć do ekranu logowania
+                                         navController.navigate("auth_screen") {
+                                             popUpTo(0) { inclusive = true }
+                                         }
+                                     }
+                                 )
+                             } else {
+-                                // Jeśli użytkownik nie jest zalogowany (np. kliknął Wyloguj),
+-                                // upewniamy się, że usługa nie działa w tle.
++                                // Jeśli nie ma użytkownika, zatrzymaj lokalizację
+                                 stopLocationService()
+                             }
++
+                             delay(10000L) // Sprawdzaj co 10 sekund
+                         }
+                     }
+ 
+                     // --- 3. GŁÓWNA NAWIGACJA ---
+-                    // Cała mapa ekranów znajduje się w pliku AppNavigation.kt
+                     AppNavigation(
+                         navController = navController,
+                         userSelection = userSelection
+@@ -83,11 +78,15 @@
+         }
+     }
+ 
+-    // --- FUNKCJE POMOCNICZE DO USŁUGI ---
++    override fun onDestroy() {
++        super.onDestroy()
++        // Sprzątanie przy zamknięciu aplikacji
++        FirebaseService.clearUserLocation()
++        stopLocationService()
++    }
+ 
+     private fun startLocationService() {
+         val intent = Intent(this, LocationService::class.java)
+-        // W nowszych Androidach (Oreo+) trzeba użyć startForegroundService
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+             startForegroundService(intent)
+         } else {
+Index: app/src/main/java/pl/example/connectnear/AppNavigation.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/AppNavigation.kt b/app/src/main/java/pl/example/connectnear/AppNavigation.kt
+--- a/app/src/main/java/pl/example/connectnear/AppNavigation.kt
++++ b/app/src/main/java/pl/example/connectnear/AppNavigation.kt
+@@ -5,8 +5,10 @@
+ import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.ui.Modifier
+ import androidx.navigation.NavHostController
++import androidx.navigation.NavType
+ import androidx.navigation.compose.NavHost
+ import androidx.navigation.compose.composable
++import androidx.navigation.navArgument
+ 
+ @Composable
+ fun AppNavigation(
+@@ -25,18 +27,22 @@
+             )
+         }
+ 
+-        // --- 1. LOGOWANIE / REJESTRACJA ---
++        // --- 1. LOGOWANIE / AUTO-START ---
+         composable("auth_screen") {
+-            // A. Automatyczne logowanie
++
++            // A. Automatyczne logowanie + NAPRAWA DANYCH PO AKTUALIZACJI
+             LaunchedEffect(Unit) {
+                 if (FirebaseService.auth.currentUser != null) {
+                     FirebaseService.getCurrentUserProfile { userProfile ->
+                         if (userProfile != null) {
+-                            // Przepisujemy dane
++                            // 1. Przepisujemy dane z bazy do aplikacji
++                            // (Jeśli w bazie brakowało np. "searchRadiusKm", ProfileRepo wstawiło tam domyślne 50.0)
+                             userSelection.userId = userProfile.userId
+                             userSelection.name = userProfile.name
+                             userSelection.customId = userProfile.customId
+                             userSelection.category = userProfile.category
++                            userSelection.subCategory = userProfile.subCategory
++                            userSelection.interests = userProfile.interests
+                             userSelection.profileImageUrl = userProfile.profileImageUrl
+                             userSelection.description = userProfile.description
+                             userSelection.locationUpdateInterval = userProfile.locationUpdateInterval
+@@ -44,18 +50,30 @@
+                             userSelection.preferredAge = userProfile.preferredAge
+                             userSelection.mySex = userProfile.mySex
+                             userSelection.preferredSex = userProfile.preferredSex
++
+                             userSelection.instagramLink = userProfile.instagramLink
+                             userSelection.facebookLink = userProfile.facebookLink
+                             userSelection.tiktokLink = userProfile.tiktokLink
+                             userSelection.messengerLink = userProfile.messengerLink
+                             userSelection.youtubeSongLink = userProfile.youtubeSongLink
+                             userSelection.youtubeStartTime = userProfile.youtubeStartTime
++
+                             userSelection.visibilityMode = userProfile.visibilityMode
++                            userSelection.searchRadiusKm = userProfile.searchRadiusKm
++                            userSelection.shareLocation = userProfile.shareLocation
+ 
++                            // 2. --- KLUCZOWY MOMENT AKTUALIZACJI ---
++                            // Od razu zapisujemy ten stan z powrotem do Firebase.
++                            // Dzięki temu, jeśli stary użytkownik nie miał pola "searchRadiusKm",
++                            // teraz zostanie ono utworzone w bazie z wartością domyślną.
++                            FirebaseService.saveCurrentUser(userSelection) {}
++
++                            // 3. Idziemy do aplikacji
+                             navController.navigate("second_stage") {
+                                 popUpTo("auth_screen") { inclusive = true }
+                             }
+                         } else {
++                            // Jest sesja, ale brak profilu
+                             userSelection.userId = FirebaseService.auth.currentUser!!.uid
+                             navController.navigate("login_info_screen")
+                         }
+@@ -63,21 +81,17 @@
+                 }
+             }
+ 
+-            // B. Widok logowania
+             AuthScreen(
+                 onLoginSuccess = {
+                     FirebaseService.getCurrentUserProfile { userProfile ->
+-                        // Tutaj również można by dodać pełne przepisywanie danych jak wyżej,
+-                        // ale dla uproszczenia po prostu nawigujemy, a MainActivity/UserSelection
+-                        // i tak się odświeży przy ponownym wejściu.
+-                        // Dla pewności w AuthScreen lepiej byłoby wywołać logikę pobrania.
++                        // Po ręcznym logowaniu też idziemy dalej
+                         navController.navigate("second_stage")
+                     }
+                 }
+             )
+         }
+ 
+-        // --- 1.5. UZUPEŁNIANIE PROFILU ---
++        // --- 1.5. UZUPEŁNIANIE DANYCH ---
+         composable("login_info_screen") {
+             LoginInfoScreen(
+                 initialName = userSelection.name,
+@@ -92,7 +106,7 @@
+             )
+         }
+ 
+-        // --- 2. WYBÓR KATEGORII ---
++        // --- 2. KATEGORIA ---
+         composable("second_stage") {
+             SecondStage(
+                 modifier = Modifier.fillMaxSize(),
+@@ -144,48 +158,73 @@
+                 userSelection = userSelection,
+                 onBackClick = { navController.popBackStack() },
+                 onChatClick = { otherUserId, otherUserName ->
+-                    navController.navigate("chat_screen/$otherUserId/$otherUserName")
++                    navController.navigate("chat_screen/$otherUserId/$otherUserName?isGroup=false")
+                 },
+                 onProfileClick = { navController.navigate("profile_screen") },
+                 onOtherUserProfileClick = { targetUserId -> navController.navigate("user_profile_screen/$targetUserId") },
+-                onFriendsListClick = { navController.navigate("friends_list_screen") }
++                onFriendsListClick = { navController.navigate("friends_list_screen") },
++                onGroupsClick = { navController.navigate("groups_screen") }
+             )
+         }
+ 
+-        // --- 5. EKRANY DODATKOWE ---
++        // --- 5. LISTA ZNAJOMYCH ---
+         composable("friends_list_screen") {
+             FriendsListScreen(
+                 myUserId = userSelection.userId,
+                 onBackClick = { navController.popBackStack() },
+                 onChatClick = { friendId, friendName ->
+-                    navController.navigate("chat_screen/$friendId/$friendName")
++                    navController.navigate("chat_screen/$friendId/$friendName?isGroup=false")
++                }
++            )
++        }
++
++        // --- 6. LISTA GRUP ---
++        composable("groups_screen") {
++            GroupsScreen(
++                myUserId = userSelection.userId,
++                onBackClick = { navController.popBackStack() },
++                onGroupClick = { groupId, groupName ->
++                    navController.navigate("chat_screen/$groupId/$groupName?isGroup=true")
+                 }
+             )
+         }
+ 
++        // --- 7. PROFIL INNEJ OSOBY ---
+         composable("user_profile_screen/{targetUserId}") { backStackEntry ->
+             val targetUserId = backStackEntry.arguments?.getString("targetUserId") ?: ""
+             UserProfileScreen(
+                 targetUserId = targetUserId,
+                 onBackClick = { navController.popBackStack() },
+                 onChatClick = { userId, userName ->
+-                    navController.navigate("chat_screen/$userId/$userName")
++                    navController.navigate("chat_screen/$userId/$userName?isGroup=false")
+                 }
+             )
+         }
+ 
+-        composable("chat_screen/{userId}/{userName}") { backStackEntry ->
++        // --- 8. CZAT ---
++        composable(
++            route = "chat_screen/{userId}/{userName}?isGroup={isGroup}",
++            arguments = listOf(
++                navArgument("userId") { type = NavType.StringType },
++                navArgument("userName") { type = NavType.StringType },
++                navArgument("isGroup") { type = NavType.BoolType; defaultValue = false }
++            )
++        ) { backStackEntry ->
+             val otherUserId = backStackEntry.arguments?.getString("userId") ?: ""
+             val otherUserName = backStackEntry.arguments?.getString("userName") ?: ""
++            val isGroup = backStackEntry.arguments?.getBoolean("isGroup") ?: false
++
+             ChatScreen(
+                 myUserId = userSelection.userId,
+                 myUserName = userSelection.name,
+                 otherUserId = otherUserId,
+                 otherUserName = otherUserName,
++                isGroup = isGroup,
+                 onBackClick = { navController.popBackStack() }
+             )
+         }
+ 
++        // --- 9. MÓJ PROFIL ---
+         composable("profile_screen") {
+             ProfileScreen(
+                 userSelection = userSelection,
+Index: app/src/main/java/pl/example/connectnear/UserSelection.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/UserSelection.kt b/app/src/main/java/pl/example/connectnear/UserSelection.kt
+--- a/app/src/main/java/pl/example/connectnear/UserSelection.kt
++++ b/app/src/main/java/pl/example/connectnear/UserSelection.kt
+@@ -2,11 +2,15 @@
+ 
+ import com.google.firebase.firestore.GeoPoint
+ 
+-// Klasa danych użytkownika (Model)
+ data class UserSelection(
+     var userId: String = "",
+     var customId: String = "",
+-    var name: String = "",    var category: String = "",
++    var name: String = "",
++    var category: String = "",// --- NOWE POLA ---
++    var subCategory: String = "", // Np. "Siłownia", "Rekreacyjny"
++    var interests: String = "",   // Np. "Gry, Filmy, Podróże"
++    // -----------------
++
+     var myAge: String = "",
+     var preferredAge: String = "",
+     var mySex: String = "",
+@@ -25,5 +29,7 @@
+     var youtubeStartTime: Int = 0,
+ 
+     // Ustawienia
+-    var visibilityMode: String = "public" // "public" lub "friends"
++    var visibilityMode: String = "public",
++    var searchRadiusKm: Double = 50.0,
++    var shareLocation: Boolean = true
+ )
+Index: app/src/main/java/pl/example/connectnear/FirebaseService.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/FirebaseService.kt b/app/src/main/java/pl/example/connectnear/FirebaseService.kt
+--- a/app/src/main/java/pl/example/connectnear/FirebaseService.kt
++++ b/app/src/main/java/pl/example/connectnear/FirebaseService.kt
+@@ -2,22 +2,15 @@
+ 
+ import android.net.Uri
+ import com.google.firebase.auth.FirebaseAuth
+-import com.google.firebase.firestore.FirebaseFirestore // <-- Ważny import
++import com.google.firebase.firestore.FirebaseFirestore
+ import java.util.UUID
+ 
+-// Ten obiekt teraz tylko przekazuje zadania do konkretnych "Repozytoriów".
+-// Oraz obsługuje sesję użytkownika.
+ object FirebaseService {
+ 
+-    // Wystawiamy obiekt auth
+     val auth: FirebaseAuth = FirebaseAuth.getInstance()
+-
+-    // --- NAPRAWA BŁĘDU: PRZYWRACAMY 'db' ---
+-    // Te funkcje na dole (od sesji) potrzebują tej zmiennej:
+     private val db = FirebaseFirestore.getInstance()
+ 
+-
+-    // --- AUTORYZACJA (Delegujemy do AuthRepo) ---
++    // --- AUTORYZACJA ---
+     fun signUp(email: String, pass: String, onSuccess: () -> Unit, onError: (String) -> Unit) =
+         AuthRepo.signUp(email, pass, onSuccess, onError)
+ 
+@@ -29,8 +22,7 @@
+     fun sendPasswordResetEmail(email: String, onSuccess: () -> Unit, onError: (String) -> Unit) =
+         AuthRepo.sendPasswordResetEmail(email, onSuccess, onError)
+ 
+-
+-    // --- PROFIL (Delegujemy do ProfileRepo) ---
++    // --- PROFIL ---
+     fun saveCurrentUser(userSelection: UserSelection, onSuccess: () -> Unit) =
+         ProfileRepo.saveCurrentUser(userSelection, onSuccess)
+ 
+@@ -52,8 +44,7 @@
+     fun checkIfNameExists(name: String, onResult: (Boolean) -> Unit) =
+         ProfileRepo.checkIfNameExists(name, onResult)
+ 
+-
+-    // --- ZNAJOMI (Delegujemy do FriendsRepo) ---
++    // --- ZNAJOMI ---
+     fun checkIfFriends(myUserId: String, targetUserId: String, onResult: (Boolean) -> Unit) =
+         FriendsRepo.checkIfFriends(myUserId, targetUserId, onResult)
+ 
+@@ -69,13 +60,31 @@
+     fun removeFriend(myUserId: String, friendId: String, onSuccess: () -> Unit) =
+         FriendsRepo.removeFriend(myUserId, friendId, onSuccess)
+ 
++    // --- GRUPY (NOWE FUNKCJE) ---
++    fun createGroup(groupName: String, ownerId: String, memberIds: List<String>, isPublic: Boolean, onSuccess: () -> Unit) =
++        GroupRepo.createGroup(groupName, ownerId, memberIds, isPublic, onSuccess)
++
++    fun getMyGroups(myUserId: String, onSuccess: (List<Group>) -> Unit) =
++        GroupRepo.getMyGroups(myUserId, onSuccess)
+ 
+-    // --- CZAT I PLIKI (Delegujemy do ChatRepo) ---
++    fun getPublicGroups(onSuccess: (List<Group>) -> Unit) =
++        GroupRepo.getPublicGroups(onSuccess)
++
++    fun requestJoinGroup(groupId: String, myUserId: String, onSuccess: () -> Unit) =
++        GroupRepo.requestJoinGroup(groupId, myUserId, onSuccess)
++
++    fun approveRequest(groupId: String, userIdToApprove: String, onSuccess: () -> Unit) =
++        GroupRepo.approveRequest(groupId, userIdToApprove, onSuccess)
++
++    fun rejectRequest(groupId: String, userIdToReject: String, onSuccess: () -> Unit) =
++        GroupRepo.rejectRequest(groupId, userIdToReject, onSuccess)
++
++    // --- CZAT ---
+     fun getChatId(user1: String, user2: String): String =
+         ChatRepo.getChatId(user1, user2)
+ 
+-    fun sendMessage(chatId: String, message: ChatMessage, receiverId: String, senderName: String) =
+-        ChatRepo.sendMessage(chatId, message, receiverId, senderName)
++    fun sendMessage(chatId: String, message: ChatMessage, receiverId: String, senderName: String, isGroup: Boolean = false) =
++        ChatRepo.sendMessage(chatId, message, receiverId, senderName, isGroup)
+ 
+     fun getMessages(chatId: String, onUpdate: (List<ChatMessage>) -> Unit) =
+         ChatRepo.getMessages(chatId, onUpdate)
+@@ -86,50 +95,40 @@
+     fun listenForNotifications(myUserId: String, onNewNotification: (Map<String, Any>) -> Unit) =
+         ChatRepo.listenForNotifications(myUserId, onNewNotification)
+ 
+-
+-    // --- MAPA (Delegujemy do MapRepo) ---
+-    fun findMatches(mySelection: UserSelection, radiusKm: Double = 40000.0, onResult: (List<FoundUser>) -> Unit) =
+-        MapRepo.findMatches(mySelection, radiusKm, onResult)
++    // --- MAPA ---
++    fun findMatches(mySelection: UserSelection, onResult: (List<FoundUser>) -> Unit) =
++        MapRepo.findMatches(mySelection, onResult)
+ 
+-
+-    // --- ZARZĄDZANIE SESJĄ (To obsługujemy tutaj lokalnie) ---
+-
+-    // 1. Funkcja wywoływana przy LOGOWANIU (Tworzy nową sesję)
++    // --- SESJA ---
+     fun startNewSession(userId: String, onSuccess: () -> Unit) {
+-        // Generujemy losowy token
+         val sessionToken = UUID.randomUUID().toString()
+-
+-        val updates = mapOf(
+-            "currentSessionToken" to sessionToken,
+-            "lastLogin" to System.currentTimeMillis()
+-        )
+-
++        val updates = mapOf("currentSessionToken" to sessionToken, "lastLogin" to System.currentTimeMillis())
+         db.collection("users").document(userId).update(updates)
+-            .addOnSuccessListener {
+-                // Zapisz token lokalnie w aplikacji
+-                CurrentUserSession.token = sessionToken
+-                onSuccess()
+-            }
+-            .addOnFailureListener { onSuccess() } // Fallback: pozwól wejść nawet przy błędzie
++            .addOnSuccessListener { CurrentUserSession.token = sessionToken; onSuccess() }
++            .addOnFailureListener { onSuccess() }
+     }
+ 
+-    // 2. Funkcja sprawdzająca sesję (będzie używana w tle)
+     fun checkSessionValidity(userId: String, onInvalid: () -> Unit) {
+-        // Jeśli nie mamy lokalnego tokena (np. świeży start), to pomiń
+         if (CurrentUserSession.token.isEmpty()) return
+-
+         db.collection("users").document(userId).get().addOnSuccessListener { document ->
+             val serverToken = document.getString("currentSessionToken")
+-
+-            // Jeśli token na serwerze jest INNY niż mój lokalny -> ktoś inny się zalogował!
+-            if (serverToken != null && serverToken != CurrentUserSession.token) {
+-                onInvalid() // Wywołaj funkcję wylogowania
+-            }
++            if (serverToken != null && serverToken != CurrentUserSession.token) { onInvalid() }
+         }
+     }
++
++    object CurrentUserSession { var token: String = "" }
++    // W pliku FirebaseService.kt
++
++    // Funkcja usuwająca lokalizację z bazy (np. przy wyjściu z apki)
++    fun clearUserLocation(onSuccess: () -> Unit = {}) {
++        val userId = auth.currentUser?.uid ?: return
+ 
+-    // Prosty obiekt do trzymania tokena w pamięci RAM telefonu
+-    object CurrentUserSession {
+-        var token: String = ""
++        // Ustawiamy location na null
++        val updates = mapOf<String, Any?>("location" to null)
++
++        db.collection("users").document(userId).update(updates)
++            .addOnSuccessListener { onSuccess() }
++            .addOnFailureListener { /* Ignoruj błędy przy zamykaniu */ }
+     }
++
+ }
+Index: app/src/main/java/pl/example/connectnear/LocationService.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/LocationService.kt b/app/src/main/java/pl/example/connectnear/LocationService.kt
+--- a/app/src/main/java/pl/example/connectnear/LocationService.kt
++++ b/app/src/main/java/pl/example/connectnear/LocationService.kt
+@@ -2,6 +2,7 @@
+ 
+ import android.app.Notification
+ import android.app.NotificationChannel
++//import android.app.Notificationimport android.app.NotificationChannel
+ import android.app.NotificationManager
+ import android.app.Service
+ import android.content.Intent
+@@ -18,30 +19,47 @@
+     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
+     private lateinit var fusedLocationClient: FusedLocationProviderClient
+ 
+-    // Domyślny interwał (można go zmienić, pobierając z bazy, ale dla uproszczenia tła damy stały)
+-    private val UPDATE_INTERVAL = 30000L // 30 sekund
++    // Interwał aktualizacji w tle (np. 30 sekund)
++    private val UPDATE_INTERVAL = 30000L
+ 
+     override fun onBind(intent: Intent?): IBinder? = null
+ 
+     override fun onCreate() {
+         super.onCreate()
+         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+-        startForegroundService() // Pokaż powiadomienie "Aplikacja działa w tle"
++        startForegroundService()
+         startLocationUpdates()
+     }
+ 
++    // --- TO JEST NOWOŚĆ: Wykrywanie zamknięcia aplikacji ---
++    override fun onTaskRemoved(rootIntent: Intent?) {
++        super.onTaskRemoved(rootIntent)
++
++        // Gdy użytkownik "ubije" aplikację, usuwamy lokalizację z bazy
++        val userId = FirebaseAuth.getInstance().currentUser?.uid
++        if (userId != null) {
++            FirebaseFirestore.getInstance().collection("users")
++                .document(userId)
++                .update("location", null) // Kasujemy współrzędne
++        }
++
++        // Zatrzymujemy usługę
++        stopSelf()
++    }
++    // -------------------------------------------------------
++
+     private fun startForegroundService() {
+         val channelId = "location_channel"
+         val channelName = "Lokalizacja w tle"
+ 
+-        // Tworzenie kanału powiadomień (wymagane w nowym Androidzie)
+-        val channel = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_LOW)
++        val channel =
++            NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_LOW)
+         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+ 
+         val notification: Notification = NotificationCompat.Builder(this, channelId)
+             .setContentTitle("ConnectNear")
+             .setContentText("Udostępnianie lokalizacji w tle...")
+-            .setSmallIcon(android.R.drawable.ic_menu_mylocation) // Możesz dać swoją ikonę
++            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+             .build()
+ 
+         startForeground(1, notification)
+@@ -54,34 +72,26 @@
+ 
+                 if (userId != null) {
+                     try {
+-                        // Pobieramy lokalizację (PRIORITY_HIGH_ACCURACY)
+                         fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+                             .addOnSuccessListener { location ->
+                                 if (location != null) {
+                                     val geoPoint = GeoPoint(location.latitude, location.longitude)
+ 
+-                                    // Wysyłamy do Firebase (tylko lokalizację, żeby nie nadpisywać reszty)
+                                     FirebaseFirestore.getInstance().collection("users")
+                                         .document(userId)
+                                         .update("location", geoPoint)
+-                                        .addOnFailureListener {
+-                                            // Ignoruj błędy w tle
+-                                        }
+                                 }
+                             }
+-                    } catch (e: SecurityException) {
+-                        // Brak uprawnień - usługa powinna zostać zatrzymana z zewnątrz
+-                    }
++                    } catch (e: SecurityException) { }
+                 }
+-
+-                // Czekamy przed kolejną aktualizacją
+                 delay(UPDATE_INTERVAL)
+             }
+         }
+     }
+ 
+     override fun onDestroy() {
+-        super.onCreate()
+-        serviceScope.cancel() // Zatrzymaj pętlę przy niszczeniu
++        super.onDestroy()
++        serviceScope.cancel()
++        // Opcjonalnie: Tu też można wywołać kasowanie, ale onTaskRemoved jest pewniejsze przy "swipe"
+     }
+ }
+Index: app/src/main/java/pl/example/connectnear/LoginInfoScreen.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/LoginInfoScreen.kt b/app/src/main/java/pl/example/connectnear/LoginInfoScreen.kt
+--- a/app/src/main/java/pl/example/connectnear/LoginInfoScreen.kt
++++ b/app/src/main/java/pl/example/connectnear/LoginInfoScreen.kt
+@@ -11,6 +11,7 @@
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.graphics.Brush
+ import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ 
+@@ -32,27 +33,47 @@
+         horizontalAlignment = Alignment.CenterHorizontally,
+         verticalArrangement = Arrangement.Center
+     ) {
+-        Text("Jak się nazywasz?", fontSize = 28.sp, color = Color.White, modifier = Modifier.padding(bottom = 10.dp))
+-        Text("Ten nick musi być unikalny.", fontSize = 14.sp, color = Color.White.copy(alpha = 0.8f), modifier = Modifier.padding(bottom = 30.dp))
++        Text(
++            text = "Jak się nazywasz?",
++            fontSize = 28.sp,
++            color = Color.White,
++            fontWeight = FontWeight.Bold,
++            modifier = Modifier.padding(bottom = 10.dp)
++        )
++        Text(
++            text = "Ten nick musi być unikalny i będzie widoczny dla innych.",
++            fontSize = 14.sp,
++            color = Color.White.copy(alpha = 0.8f),
++            modifier = Modifier.padding(bottom = 30.dp)
++        )
+ 
+         OutlinedTextField(
+             value = name,
+             onValueChange = {
++                // Czyścimy błąd, gdy użytkownik zaczyna pisać
++                if (errorMessage.isNotEmpty()) errorMessage = ""
+                 name = it
+-                errorMessage = "" // Czyść błąd przy pisaniu
+             },
+             label = { Text("Twój Nick") },
+             singleLine = true,
+             isError = errorMessage.isNotEmpty(),
+             colors = OutlinedTextFieldDefaults.colors(
+                 focusedContainerColor = Color.White.copy(alpha = 0.2f),
+-                unfocusedContainerColor = Color.White.copy(alpha = 0.2f)
++                unfocusedContainerColor = Color.White.copy(alpha = 0.2f),
++                focusedBorderColor = Color.White,
++                unfocusedBorderColor = Color.LightGray,
++                focusedTextColor = Color.White,
++                unfocusedTextColor = Color.White
+             ),
+             modifier = Modifier.fillMaxWidth()
+         )
+ 
+         if (errorMessage.isNotEmpty()) {
+-            Text(errorMessage, color = Color.Red, modifier = Modifier.padding(top = 8.dp))
++            Text(
++                text = errorMessage,
++                color = MaterialTheme.colorScheme.error,
++                modifier = Modifier.padding(top = 8.dp)
++            )
+         }
+ 
+         Spacer(modifier = Modifier.height(32.dp))
+@@ -62,23 +83,30 @@
+         } else {
+             Button(
+                 onClick = {
+-                    if (name.isNotBlank()) {
+-                        isLoading = true
+-                        val finalName = name.trim()
++                    val finalName = name.trim()
+ 
+-                        // --- SPRAWDZAMY CZY NICK WOLNY ---
+-                        FirebaseService.checkIfNameExists(finalName) { exists ->
++                    // 1. Sprawdzenie długości
++                    if (finalName.length < 3) {
++                        errorMessage = "Nick musi mieć co najmniej 3 znaki."
++                        return@Button
++                    }
++
++                    isLoading = true
++
++                    // 2. Sprawdzenie unikalności w Firebase
++                    FirebaseService.checkIfNameExists(finalName) { exists ->
++                        if (exists) {
++                            // Nick zajęty
+                             isLoading = false
+-                            if (exists) {
+-                                errorMessage = "Ten nick jest już zajęty! Wybierz inny."
+-                            } else {
+-                                // Nick wolny -> Idziemy dalej
+-                                onNextClick(finalName, finalName)
+-                            }
++                            errorMessage = "Ten nick jest już zajęty! Wybierz inny."
++                        } else {
++                            // Nick wolny -> Zapisujemy i idziemy dalej
++                            isLoading = false
++                            onNextClick(finalName, finalName)
+                         }
+                     }
+                 },
+-                enabled = name.isNotBlank(),
++                enabled = name.isNotBlank() && !isLoading,
+                 modifier = Modifier.fillMaxWidth().height(50.dp),
+                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF006400))
+             ) {
+Index: app/src/main/java/pl/example/connectnear/UserProfileScreen.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/UserProfileScreen.kt b/app/src/main/java/pl/example/connectnear/UserProfileScreen.kt
+--- a/app/src/main/java/pl/example/connectnear/UserProfileScreen.kt
++++ b/app/src/main/java/pl/example/connectnear/UserProfileScreen.kt
+@@ -24,6 +24,7 @@
+ import androidx.compose.ui.layout.ContentScale
+ import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextAlign
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ import androidx.compose.ui.viewinterop.AndroidView
+@@ -60,6 +61,7 @@
+         }
+     }
+ 
++    // --- FUNKCJE POMOCNICZE ---
+     fun extractYoutubeId(url: String): String? {
+         val pattern = "(?<=watch\\?v=|/videos/|embed\\/|youtu.be\\/|\\/v\\/|\\/e\\/|watch\\?v%3D|watch\\?feature=player_embedded&v=|%2Fvideos%2F|embed%\u200C\u200B2F|youtu.be%2F|%2Fv%2F)[^#\\&\\?\\n]*"
+         val compiledPattern = Pattern.compile(pattern)
+@@ -93,8 +95,10 @@
+         }
+     }
+ 
++    // --- UI ---
+     Column(
+-        modifier = Modifier.fillMaxSize()
++        modifier = Modifier
++            .fillMaxSize()
+             .background(Brush.verticalGradient(colors = listOf(Color(0xFF0AA4F4), Color(0xFF1CD9C3))))
+             .padding(16.dp)
+             .verticalScroll(rememberScrollState()),
+@@ -111,34 +115,107 @@
+         } else if (userData != null) {
+             val user = userData!!
+ 
+-            Box(modifier = Modifier.size(150.dp).clip(CircleShape).background(Color.White).border(3.dp, Color.White, CircleShape), contentAlignment = Alignment.Center) {
++            // --- PODSTAWOWE INFO ---
++            Box(
++                modifier = Modifier
++                    .size(150.dp)
++                    .clip(CircleShape)
++                    .background(Color.White)
++                    .border(3.dp, Color.White, CircleShape),
++                contentAlignment = Alignment.Center
++            ) {
+                 if (user.profileImageUrl.isNotEmpty()) {
+-                    AsyncImage(model = user.profileImageUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
++                    AsyncImage(
++                        model = user.profileImageUrl,
++                        contentDescription = null,
++                        modifier = Modifier.fillMaxSize(),
++                        contentScale = ContentScale.Crop
++                    )
+                 } else {
+                     Text("Brak\nZdjęcia", color = Color.Gray, fontSize = 14.sp)
+                 }
+             }
+ 
+             Spacer(modifier = Modifier.height(20.dp))
++
+             Text(user.name, fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White)
+-            Text(user.category, fontSize = 18.sp, color = Color.White.copy(0.8f))
++
++            // KATEGORIA I PODKATEGORIA
++            Row(verticalAlignment = Alignment.CenterVertically) {
++                Text(user.category, fontSize = 18.sp, color = Color.White.copy(0.9f), fontWeight = FontWeight.SemiBold)
++                if (user.category == "Sport" && user.subCategory.isNotEmpty()) {
++                    Text(" • ${user.subCategory}", fontSize = 18.sp, color = Color.White.copy(0.8f))
++                }
++            }
++
+             Spacer(modifier = Modifier.height(30.dp))
+ 
++            // --- LOGIKA BLOKADY ---
+             if (isFriend) {
+-                // WIDOK DLA ZNAJOMYCH
++
++                // 1. OPIS I ZAINTERESOWANIA
++                Card(
++                    colors = CardDefaults.cardColors(containerColor = Color.White.copy(0.2f)),
++                    modifier = Modifier.fillMaxWidth()
++                ) {
++                    Column(modifier = Modifier.padding(16.dp)) {
++                        Text("O mnie:", fontWeight = FontWeight.Bold, color = Color.White)
++                        Spacer(modifier = Modifier.height(4.dp))
++                        Text(
++                            text = if (user.description.isNotEmpty()) user.description else "Brak opisu.",
++                            color = Color.White, fontSize = 16.sp
++                        )
++
++                        // --- NOWE: ZAINTERESOWANIA ---
++                        if (user.interests.isNotEmpty()) {
++                            Spacer(modifier = Modifier.height(12.dp))
++                            Text("Zainteresowania:", fontWeight = FontWeight.Bold, color = Color.White)
++                            Spacer(modifier = Modifier.height(4.dp))
++                            Text(text = user.interests, color = Color.White, fontSize = 16.sp)
++                        }
++                    }
++                }
++
++                Spacer(modifier = Modifier.height(20.dp))
++
++                // 2. MEDIA SPOŁECZNOŚCIOWE
+                 Text("Media:", color = Color.White, fontWeight = FontWeight.Bold)
+-                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+-                    if (user.instagramLink.isNotEmpty()) Button(onClick = { openSocialMedia(user.instagramLink, "instagram") }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE1306C))) { Text("Insta") }
+-                    if (user.facebookLink.isNotEmpty()) Button(onClick = { openSocialMedia(user.facebookLink, "facebook") }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1877F2))) { Text("FB") }
+-                    if (user.tiktokLink.isNotEmpty()) Button(onClick = { openSocialMedia(user.tiktokLink, "tiktok") }, colors = ButtonDefaults.buttonColors(containerColor = Color.Black)) { Text("TikTok") }
++                Row(
++                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
++                    horizontalArrangement = Arrangement.SpaceEvenly
++                ) {
++                    if (user.instagramLink.isNotEmpty()) {
++                        Button(
++                            onClick = { openSocialMedia(user.instagramLink, "instagram") },
++                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE1306C))
++                        ) { Text("Insta") }
++                    }
++                    if (user.facebookLink.isNotEmpty()) {
++                        Button(
++                            onClick = { openSocialMedia(user.facebookLink, "facebook") },
++                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1877F2))
++                        ) { Text("FB") }
++                    }
++                    if (user.tiktokLink.isNotEmpty()) {
++                        Button(
++                            onClick = { openSocialMedia(user.tiktokLink, "tiktok") },
++                            colors = ButtonDefaults.buttonColors(containerColor = Color.Black)
++                        ) { Text("TikTok") }
++                    }
+                 }
+                 if (user.messengerLink.isNotEmpty()) {
+-                    Button(onClick = { openSocialMedia(user.messengerLink, "messenger") }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0084FF)), modifier = Modifier.fillMaxWidth()) { Text("Messenger") }
++                    Button(
++                        onClick = { openSocialMedia(user.messengerLink, "messenger") },
++                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0084FF)),
++                        modifier = Modifier.fillMaxWidth()
++                    ) { Text("Messenger") }
+                 }
+ 
++                // 3. MUZYKA
+                 if (user.youtubeSongLink.isNotEmpty()) {
+                     val videoId = extractYoutubeId(user.youtubeSongLink)
+                     val startTime = user.youtubeStartTime.toFloat()
++
+                     Spacer(modifier = Modifier.height(15.dp))
+                     if (videoId != null) {
+                         Card(colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.9f)), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+@@ -164,35 +241,48 @@
+                     }
+                 }
+ 
+-                Spacer(modifier = Modifier.height(20.dp))
+-                Card(colors = CardDefaults.cardColors(containerColor = Color.White.copy(0.2f)), modifier = Modifier.fillMaxWidth()) {
+-                    Column(modifier = Modifier.padding(16.dp)) {
+-                        Text("O mnie:", fontWeight = FontWeight.Bold, color = Color.White)
+-                        Spacer(modifier = Modifier.height(5.dp))
+-                        Text(text = if (user.description.isNotEmpty()) user.description else "Brak opisu.", color = Color.White, fontSize = 16.sp)
+-                    }
+-                }
+                 Spacer(modifier = Modifier.height(40.dp))
+-                Button(onClick = { onChatClick(user.userId, user.name) }, modifier = Modifier.fillMaxWidth().height(50.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF006400))) {
++                Button(
++                    onClick = { onChatClick(user.userId, user.name) },
++                    modifier = Modifier.fillMaxWidth().height(50.dp),
++                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF006400))
++                ) {
+                     Text("Napisz Wiadomość", fontSize = 18.sp)
+                 }
+ 
+             } else {
+-                // WIDOK DLA OBCYCH
+-                Card(colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.9f)), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().padding(top = 20.dp)) {
+-                    Column(modifier = Modifier.padding(24.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
++                // --- WIDOK DLA OBCYCH (ZABLOKOWANY) ---
++                Card(
++                    colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.9f)),
++                    shape = RoundedCornerShape(16.dp),
++                    modifier = Modifier.fillMaxWidth().padding(top = 20.dp)
++                ) {
++                    Column(
++                        modifier = Modifier.padding(24.dp).fillMaxWidth(),
++                        horizontalAlignment = Alignment.CenterHorizontally
++                    ) {
+                         Icon(imageVector = Icons.Default.Lock, contentDescription = "Prywatny", tint = Color.Gray, modifier = Modifier.size(48.dp))
+                         Spacer(modifier = Modifier.height(16.dp))
+                         Text("To konto jest prywatne", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                         Spacer(modifier = Modifier.height(8.dp))
+-                        Text("Dodaj tego użytkownika do znajomych, aby zobaczyć jego opis, zdjęcia i muzykę.", color = Color.Gray, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
++                        Text(
++                            text = "Dodaj tego użytkownika do znajomych, aby zobaczyć jego opis, zainteresowania i muzykę.",
++                            color = Color.Gray, fontSize = 14.sp, textAlign = TextAlign.Center
++                        )
+                         Spacer(modifier = Modifier.height(24.dp))
+                         Button(
+                             onClick = {
+-                                FirebaseService.sendFriendRequest(myUserId = myUserId, myName = "Ja", targetUserId = user.userId, onSuccess = { Toast.makeText(context, "Wysłano zaproszenie!", Toast.LENGTH_SHORT).show() }, onError = { Toast.makeText(context, "Błąd: $it", Toast.LENGTH_SHORT).show() })
++                                FirebaseService.sendFriendRequest(
++                                    myUserId = myUserId,
++                                    myName = "Ja", // Uproszczenie
++                                    targetUserId = user.userId,
++                                    onSuccess = { Toast.makeText(context, "Wysłano zaproszenie!", Toast.LENGTH_SHORT).show() },
++                                    onError = { Toast.makeText(context, "Błąd: $it", Toast.LENGTH_SHORT).show() }
++                                )
+                             },
+-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)), modifier = Modifier.fillMaxWidth()
+-                        ) { Text("Wyślij zaproszenie do znajomych") }
++                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
++                            modifier = Modifier.fillMaxWidth()
++                        ) { Text("Wyślij zaproszenie") }
+                     }
+                 }
+             }
+Index: app/src/main/java/pl/example/connectnear/FourthStageControls.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/FourthStageControls.kt b/app/src/main/java/pl/example/connectnear/FourthStageControls.kt
+--- a/app/src/main/java/pl/example/connectnear/FourthStageControls.kt
++++ b/app/src/main/java/pl/example/connectnear/FourthStageControls.kt
+@@ -24,6 +24,7 @@
+     onCloseUserClick: () -> Unit,
+     onExitClick: () -> Unit,
+     onFriendsListClick: () -> Unit,
++    onGroupsClick: () -> Unit, // <-- NOWY PARAMETR
+     onMyProfileClick: () -> Unit
+ ) {
+     Box(
+@@ -96,27 +97,40 @@
+                     }
+                 }
+             } else {
+-                // --- WIDOK: DOMYŚLNY ---
++                // --- WIDOK: DOMYŚLNY (Główny pasek) ---
+                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                     Row(
+                         modifier = Modifier.fillMaxWidth(),
+-                        horizontalArrangement = Arrangement.SpaceBetween,
++                        horizontalArrangement = Arrangement.SpaceBetween, // Rozłożenie przycisków
+                         verticalAlignment = Alignment.CenterVertically
+                     ) {
++                        // 1. Wyjście
+                         Button(
+                             onClick = onExitClick,
+-                            colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
++                            colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
++                            contentPadding = PaddingValues(horizontal = 8.dp)
+                         ) { Text("Zakończ") }
+ 
++                        // 2. Znajomi
+                         Button(
+                             onClick = onFriendsListClick,
+-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF9C27B0))
++                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF9C27B0)), // Fioletowy
++                            contentPadding = PaddingValues(horizontal = 8.dp)
+                         ) { Text("Znajomi") }
+ 
++                        // 3. Grupy (NOWY PRZYCISK)
++                        Button(
++                            onClick = onGroupsClick,
++                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F51B5)), // Indygo/Granatowy
++                            contentPadding = PaddingValues(horizontal = 8.dp)
++                        ) { Text("Grupy") }
++
++                        // 4. Profil
+                         Button(
+                             onClick = onMyProfileClick,
+-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0AA4F4))
+-                        ) { Text("Mój Profil") }
++                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0AA4F4)),
++                            contentPadding = PaddingValues(horizontal = 8.dp)
++                        ) { Text("Profil") }
+                     }
+ 
+                     Text(
+Index: app/src/main/java/pl/example/connectnear/ProfileScreen.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/ProfileScreen.kt b/app/src/main/java/pl/example/connectnear/ProfileScreen.kt
+--- a/app/src/main/java/pl/example/connectnear/ProfileScreen.kt
++++ b/app/src/main/java/pl/example/connectnear/ProfileScreen.kt
+@@ -26,28 +26,34 @@
+ import androidx.compose.ui.unit.sp
+ import coil.compose.AsyncImage
+ 
+-@OptIn(ExperimentalMaterial3Api::class)
+ @Composable
+ fun ProfileScreen(
+     userSelection: UserSelection,
+     onBackClick: () -> Unit
+ ) {
+-    // --- STANY ---
++    // --- 1. STANY DANYCH ---
+     var name by remember { mutableStateOf(userSelection.name) }
+     var description by remember { mutableStateOf(userSelection.description) }
++
++    var interests by remember { mutableStateOf(userSelection.interests) }
++    var subCategory by remember { mutableStateOf(userSelection.subCategory) }
+     var profileImageUrl by remember { mutableStateOf(userSelection.profileImageUrl) }
+ 
++    // Social Media
+     var instagram by remember { mutableStateOf(userSelection.instagramLink) }
+     var facebook by remember { mutableStateOf(userSelection.facebookLink) }
+     var tiktok by remember { mutableStateOf(userSelection.tiktokLink) }
+     var messenger by remember { mutableStateOf(userSelection.messengerLink) }
+ 
++    // YouTube
+     var youtube by remember { mutableStateOf(userSelection.youtubeSongLink) }
+     var youtubeStartTime by remember { mutableStateOf(userSelection.youtubeStartTime.toString()) }
+ 
++    // UI States
+     var isLoading by remember { mutableStateOf(false) }
+     var message by remember { mutableStateOf("") }
+ 
++    // Launcher Zdjęcia
+     val imagePicker = rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri: Uri? ->
+         if (uri != null) {
+             isLoading = true
+@@ -62,21 +68,55 @@
+         }
+     }
+ 
+-    // --- GŁÓWNY UKŁAD ---
++    // Funkcja zapisu
++    fun saveChanges() {
++        if (name.isBlank()) {
++            message = "Nick nie może być pusty!"
++            return
++        }
++        isLoading = true
++
++        // Aktualizacja obiektu
++        userSelection.name = name
++        userSelection.description = description
++        userSelection.interests = interests
++        userSelection.subCategory = subCategory
++        userSelection.profileImageUrl = profileImageUrl
++        userSelection.instagramLink = instagram
++        userSelection.facebookLink = facebook
++        userSelection.tiktokLink = tiktok
++        userSelection.messengerLink = messenger
++        userSelection.youtubeSongLink = youtube
++        userSelection.youtubeStartTime = youtubeStartTime.toIntOrNull() ?: 0
++
++        FirebaseService.updateFullProfile(
++            user = userSelection,
++            onSuccess = { isLoading = false; message = "Zapisano pomyślnie!" },
++            onError = { isLoading = false; message = "Błąd: $it" }
++        )
++    }
++
++    // --- 2. GŁÓWNY UKŁAD UI ---
+     Column(
+-        modifier = Modifier.fillMaxSize()
++        modifier = Modifier
++            .fillMaxSize()
+             .background(Brush.verticalGradient(colors = listOf(Color(0xFF0AA4F4), Color(0xFF1CD9C3))))
+             .padding(16.dp),
+         horizontalAlignment = Alignment.CenterHorizontally
+     ) {
+-        Text("Twój Profil", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White, modifier = Modifier.padding(bottom = 20.dp))
++        // Nagłówek
++        Text("Edycja Profilu", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White, modifier = Modifier.padding(bottom = 20.dp))
+ 
++        // Przewijana zawartość
+         Column(
+-            modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
++            modifier = Modifier
++                .weight(1f)
++                .fillMaxWidth()
++                .verticalScroll(rememberScrollState()),
+             horizontalAlignment = Alignment.CenterHorizontally
+         ) {
+-            // 1. Sekcja Avatara
+-            ProfileAvatarSection_Final(
++            // A. Avatar
++            ProfileAvatar_Internal(
+                 imageUrl = profileImageUrl,
+                 isLoading = isLoading,
+                 onImageClick = { imagePicker.launch("image/*") }
+@@ -84,50 +124,44 @@
+ 
+             Spacer(modifier = Modifier.height(20.dp))
+ 
+-            // 2. Podstawowe Dane
+-            CustomProfileTextField_Final(value = name, onValueChange = { name = it }, label = "Twój Nick", modifier = Modifier.fillMaxWidth())
+-            Spacer(modifier = Modifier.height(10.dp))
+-            CustomProfileTextField_Final(value = description, onValueChange = { description = it }, label = "O mnie (Opis)", minLines = 3, modifier = Modifier.fillMaxWidth())
++            // B. Dane Podstawowe
++            BasicInfoSection_Internal(
++                name = name, onNameChange = { name = it },
++                description = description, onDescChange = { description = it },
++                interests = interests, onInterestsChange = { interests = it }
++            )
++
++            // C. Sekcja Sportu (Warunkowa)
++            if (userSelection.category == "Sport") {
++                Spacer(modifier = Modifier.height(20.dp))
++                SportCategorySection_Internal(
++                    selectedSubCategory = subCategory,
++                    onSelect = { subCategory = it }
++                )
++            }
+ 
+             Spacer(modifier = Modifier.height(20.dp))
+ 
+-            // 3. Sekcja Social Media
+-            SocialMediaSection_Final(
++            // D. Social Media
++            SocialMediaSection_Internal(
+                 instagram = instagram, onInstaChange = { instagram = it },
+                 facebook = facebook, onFbChange = { facebook = it },
+                 tiktok = tiktok, onTiktokChange = { tiktok = it },
+-                messenger = messenger, onMessengerChange = { messenger = it },
++                messenger = messenger, onMessengerChange = { messenger = it }, // Tutaj był błąd z <caret>, naprawiony
+                 youtube = youtube, onYoutubeChange = { youtube = it },
+                 youtubeTime = youtubeStartTime, onTimeChange = { if (it.all { c -> c.isDigit() }) youtubeStartTime = it }
+             )
+ 
+             Spacer(modifier = Modifier.height(30.dp))
+ 
+-            // 4. Przycisk Zapisz
++            // E. Przycisk Zapisz
+             Button(
+-                onClick = {
+-                    if (name.isBlank()) { message = "Nick nie może być pusty!"; return@Button }
+-                    isLoading = true
+-
+-                    userSelection.name = name
+-                    userSelection.description = description
+-                    userSelection.profileImageUrl = profileImageUrl
+-                    userSelection.instagramLink = instagram
+-                    userSelection.facebookLink = facebook
+-                    userSelection.tiktokLink = tiktok
+-                    userSelection.messengerLink = messenger
+-                    userSelection.youtubeSongLink = youtube
+-                    userSelection.youtubeStartTime = youtubeStartTime.toIntOrNull() ?: 0
+-
+-                    FirebaseService.updateFullProfile(
+-                        user = userSelection,
+-                        onSuccess = { isLoading = false; message = "Zapisano pomyślnie!" },
+-                        onError = { isLoading = false; message = "Błąd: $it" }
+-                    )
+-                },
++                onClick = { saveChanges() },
+                 modifier = Modifier.fillMaxWidth().height(50.dp),
+                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF006400))
+-            ) { Text("Zapisz zmiany") }
++            ) {
++                Text("Zapisz zmiany")
++            }
+ 
+             if (message.isNotEmpty()) {
+                 Text(message, color = Color.Yellow, modifier = Modifier.padding(top = 10.dp), fontWeight = FontWeight.Bold)
+@@ -136,23 +170,143 @@
+ 
+         Spacer(modifier = Modifier.height(16.dp))
+ 
+-        // Dolne Przyciski
+-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+-            Button(onClick = { FirebaseService.signOut() }, colors = ButtonDefaults.buttonColors(containerColor = Color.Red), modifier = Modifier.weight(1f).padding(end = 8.dp)) { Text("Wyloguj") }
+-            Button(onClick = onBackClick, colors = ButtonDefaults.buttonColors(containerColor = Color.Gray), modifier = Modifier.weight(1f).padding(start = 8.dp)) { Text("Wróć") }
+-        }
++        // F. Dolny pasek
++        ProfileBottomBar_Internal(onBackClick = onBackClick)
++    }
++}
++
++// =====================================================================
++// --- KOMPONENTY UI (Zmienione nazwy na _Internal, aby uniknąć konfliktów) ---
++// =====================================================================
++
++@Composable
++fun ProfileAvatar_Internal(imageUrl: String, isLoading: Boolean, onImageClick: () -> Unit) {
++    Box(
++        modifier = Modifier
++            .size(120.dp)
++            .clip(CircleShape)
++            .background(Color.White)
++            .border(2.dp, Color.Gray, CircleShape)
++            .clickable { onImageClick() },
++        contentAlignment = Alignment.Center
++    ) {
++        if (imageUrl.isNotEmpty()) {
++            AsyncImage(model = imageUrl, contentDescription = "Profilowe", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
++        } else {
++            Text("Dodaj\nZdjęcie", color = Color.Gray, fontSize = 12.sp, textAlign = TextAlign.Center)
++        }
++        if (isLoading) CircularProgressIndicator()
++    }
++    Text("Kliknij w kółko, aby zmienić zdjęcie", color = Color.White.copy(0.8f), fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
++}
++
++@Composable
++fun BasicInfoSection_Internal(
++    name: String, onNameChange: (String) -> Unit,
++    description: String, onDescChange: (String) -> Unit,
++    interests: String, onInterestsChange: (String) -> Unit
++) {
++    Card(colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.15f)), modifier = Modifier.fillMaxWidth()) {
++        Column(modifier = Modifier.padding(16.dp)) {
++            Text("Informacje", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
++            Spacer(modifier = Modifier.height(10.dp))
++            CustomTextField_Internal(value = name, onValueChange = onNameChange, label = "Twój Nick")
++            Spacer(modifier = Modifier.height(10.dp))
++            CustomTextField_Internal(value = description, onValueChange = onDescChange, label = "Opis (O mnie)", minLines = 3)
++            Spacer(modifier = Modifier.height(10.dp))
++            CustomTextField_Internal(value = interests, onValueChange = onInterestsChange, label = "Zainteresowania (np. gry, góry)", minLines = 2)
++        }
++    }
++}
++
++@Composable
++fun SportCategorySection_Internal(selectedSubCategory: String, onSelect: (String) -> Unit) {
++    Card(colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.15f)), modifier = Modifier.fillMaxWidth()) {
++        Column(modifier = Modifier.padding(16.dp)) {
++            Text("Rodzaj aktywności (Sport):", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
++            Spacer(modifier = Modifier.height(8.dp))
++            val options = listOf(
++                "Rekreacyjny" to "Rekreacyjny (spacer, lekki ruch)",
++                "Siłownia" to "Siłownia (trening siłowy / cardio)",
++                "Wytrzymałościowy" to "Wytrzymałościowy (biegi / pływanie)"
++            )
++            options.forEach { (key, label) ->
++                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { onSelect(key) }.padding(vertical = 4.dp)) {
++                    RadioButton(
++                        selected = selectedSubCategory == key,
++                        onClick = { onSelect(key) },
++                        colors = RadioButtonDefaults.colors(selectedColor = Color.White, unselectedColor = Color.LightGray)
++                    )
++                    Text(text = label, color = Color.White, fontSize = 14.sp)
++                }
++            }
++        }
++    }
++}
++
++@Composable
++fun SocialMediaSection_Internal(
++    instagram: String, onInstaChange: (String) -> Unit,
++    facebook: String, onFbChange: (String) -> Unit,
++    tiktok: String, onTiktokChange: (String) -> Unit,
++    messenger: String, onMessengerChange: (String) -> Unit,
++    youtube: String, onYoutubeChange: (String) -> Unit,
++    youtubeTime: String, onTimeChange: (String) -> Unit
++) {
++    Card(colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.15f)), modifier = Modifier.fillMaxWidth()) {
++        Column(modifier = Modifier.padding(16.dp)) {
++            Text("Dane (Media Społecznościowe)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
++            Text("Wpisz tylko nazwy użytkownika", color = Color.LightGray, fontSize = 12.sp)
++            Spacer(modifier = Modifier.height(10.dp))
++
++            CustomTextField_Internal(value = instagram, onValueChange = onInstaChange, label = "Instagram (Nazwa)")
++            Spacer(modifier = Modifier.height(8.dp))
++            CustomTextField_Internal(value = facebook, onValueChange = onFbChange, label = "Facebook (Nazwa/ID)")
++            Spacer(modifier = Modifier.height(8.dp))
++            CustomTextField_Internal(value = tiktok, onValueChange = onTiktokChange, label = "TikTok (Nazwa)")
++            Spacer(modifier = Modifier.height(8.dp))
++            CustomTextField_Internal(value = messenger, onValueChange = onMessengerChange, label = "Messenger (Nazwa)")
++
++            Spacer(modifier = Modifier.height(12.dp))
++            Text("Muzyka (Link do YouTube):", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
++            Spacer(modifier = Modifier.height(4.dp))
++            CustomTextField_Internal(value = youtube, onValueChange = onYoutubeChange, label = "Link")
++
++            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 5.dp)) {
++                Text("Start (s):", color = Color.White, modifier = Modifier.padding(end = 8.dp))
++                OutlinedTextField(
++                    value = youtubeTime, onValueChange = onTimeChange,
++                    label = { Text("0") }, modifier = Modifier.width(80.dp), singleLine = true,
++                    colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Color.White.copy(0.2f), unfocusedContainerColor = Color.White.copy(0.2f))
++                )
++            }
++        }
++    }
++}
++
++@Composable
++fun ProfileBottomBar_Internal(onBackClick: () -> Unit) {
++    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
++        Button(
++            onClick = { FirebaseService.signOut() },
++            colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
++            modifier = Modifier.weight(1f).padding(end = 8.dp)
++        ) { Text("Wyloguj") }
++
++        Button(
++            onClick = onBackClick,
++            colors = ButtonDefaults.buttonColors(containerColor = Color.Gray),
++            modifier = Modifier.weight(1f).padding(start = 8.dp)
++        ) { Text("Wróć") }
+     }
+ }
+-
+-// --- KOMPONENTY POMOCNICZE ---
+ 
+ @Composable
+-fun CustomProfileTextField_Final(
++fun CustomTextField_Internal(
+     value: String,
+     onValueChange: (String) -> Unit,
+     label: String,
+-    minLines: Int = 1,
+-    modifier: Modifier = Modifier
++    minLines: Int = 1
+ ) {
+     OutlinedTextField(
+         value = value,
+@@ -160,7 +314,7 @@
+         label = { Text(label) },
+         singleLine = minLines == 1,
+         minLines = minLines,
+-        modifier = modifier,
++        modifier = Modifier.fillMaxWidth(),
+         colors = OutlinedTextFieldDefaults.colors(
+             focusedContainerColor = Color.White.copy(0.2f),
+             unfocusedContainerColor = Color.White.copy(0.2f),
+@@ -173,51 +327,3 @@
+         )
+     )
+ }
+-
+-@Composable
+-fun ProfileAvatarSection_Final(
+-    imageUrl: String,
+-    isLoading: Boolean,
+-    onImageClick: () -> Unit
+-) {
+-    Box(
+-        modifier = Modifier.size(120.dp).clip(CircleShape).background(Color.White).border(2.dp, Color.Gray, CircleShape).clickable { onImageClick() },
+-        contentAlignment = Alignment.Center
+-    ) {
+-        if (imageUrl.isNotEmpty()) {
+-            AsyncImage(model = imageUrl, contentDescription = "Profilowe", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+-        } else {
+-            Text("Dodaj\nZdjęcie", color = Color.Gray, fontSize = 12.sp, textAlign = TextAlign.Center)
+-        }
+-        if (isLoading) CircularProgressIndicator()
+-    }
+-    Text(text = "Kliknij w kółko, aby zmienić zdjęcie", color = Color.White.copy(0.8f), fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+-}
+-
+-@Composable
+-fun SocialMediaSection_Final(
+-    instagram: String, onInstaChange: (String) -> Unit,
+-    facebook: String, onFbChange: (String) -> Unit,
+-    tiktok: String, onTiktokChange: (String) -> Unit,
+-    messenger: String, onMessengerChange: (String) -> Unit,
+-    youtube: String, onYoutubeChange: (String) -> Unit,
+-    youtubeTime: String, onTimeChange: (String) -> Unit
+-) {
+-    Text("Social Media (Wpisz tylko nazwę/ID)", color = Color.White, fontWeight = FontWeight.Bold)
+-    Spacer(modifier = Modifier.height(10.dp))
+-
+-    CustomProfileTextField_Final(value = instagram, onValueChange = onInstaChange, label = "Instagram (Nazwa użytkownika)", modifier = Modifier.fillMaxWidth())
+-    CustomProfileTextField_Final(value = facebook, onValueChange = onFbChange, label = "Facebook (Nazwa/ID)", modifier = Modifier.fillMaxWidth())
+-    CustomProfileTextField_Final(value = tiktok, onValueChange = onTiktokChange, label = "TikTok (Nazwa użytkownika)", modifier = Modifier.fillMaxWidth())
+-    CustomProfileTextField_Final(value = messenger, onValueChange = onMessengerChange, label = "Messenger (Nazwa użytkownika)", modifier = Modifier.fillMaxWidth())
+-
+-    Spacer(modifier = Modifier.height(10.dp))
+-
+-    Text("Muzyka w tle (Wklej link)", color = Color.White, fontWeight = FontWeight.Bold)
+-    CustomProfileTextField_Final(value = youtube, onValueChange = onYoutubeChange, label = "Link do piosenki YouTube", modifier = Modifier.fillMaxWidth())
+-
+-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 5.dp)) {
+-        Text("Zacznij od sekundy:", color = Color.White, modifier = Modifier.padding(end = 8.dp))
+-        CustomProfileTextField_Final(value = youtubeTime, onValueChange = onTimeChange, label = "0", modifier = Modifier.width(100.dp))
+-    }
+-}
+Index: app/src/main/java/pl/example/connectnear/FourthStage.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/FourthStage.kt b/app/src/main/java/pl/example/connectnear/FourthStage.kt
+--- a/app/src/main/java/pl/example/connectnear/FourthStage.kt
++++ b/app/src/main/java/pl/example/connectnear/FourthStage.kt
+@@ -2,20 +2,22 @@
+ 
+ import android.Manifest
+ import android.content.pm.PackageManager
++import android.util.Log
+ import android.widget.Toast
+ import androidx.activity.compose.rememberLauncherForActivityResult
+ import androidx.activity.result.contract.ActivityResultContracts
+-import androidx.compose.foundation.clickable
+-import androidx.compose.foundation.layout.*
+-import androidx.compose.material3.*
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.padding
++import androidx.compose.material3.SnackbarDuration
++import androidx.compose.material3.SnackbarHost
++import androidx.compose.material3.SnackbarHostState
+ import androidx.compose.runtime.*
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+-import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.platform.LocalContext
+-import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
+ import androidx.core.content.ContextCompat
+ import com.google.android.gms.location.LocationServices
+@@ -33,7 +35,8 @@
+     onChatClick: (String, String) -> Unit,
+     onProfileClick: () -> Unit,
+     onOtherUserProfileClick: (String) -> Unit,
+-    onFriendsListClick: () -> Unit
++    onFriendsListClick: () -> Unit,
++    onGroupsClick: () -> Unit
+ ) {
+     val context = LocalContext.current
+     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+@@ -45,21 +48,17 @@
+     var otherUsers by remember { mutableStateOf<List<FoundUser>>(emptyList()) }
+     var selectedUser by remember { mutableStateOf<FoundUser?>(null) }
+ 
+-    // --- STANY UI (DIALOGI) ---
++    // --- STANY UI ---
+     var showFriendRequestDialog by remember { mutableStateOf(false) }
+     var requestSenderName by remember { mutableStateOf("") }
+     var requestSenderId by remember { mutableStateOf("") }
+-
+-    // Stan okna ustawień
+     var showSettingsDialog by remember { mutableStateOf(false) }
+ 
+-    // Tymczasowe stany do edycji ustawień (zanim klikniemy "Zapisz")
+-    var tempVisibilityMode by remember { mutableStateOf(userSelection.visibilityMode) }
+-    var tempInterval by remember { mutableStateOf(userSelection.locationUpdateInterval) }
+-    var expandedIntervals by remember { mutableStateOf(false) }
+-
+-    // Opcje czasu GPS
++    // --- LISTY OPCJI ---
++    // Dodano 1s i 5s zgodnie z prośbą
+     val intervals = mapOf(
++        "1s" to 1000L,
++        "5s" to 5000L,
+         "30s" to 30000L,
+         "1m" to 60000L,
+         "5m" to 300000L,
+@@ -68,6 +67,9 @@
+     )
+     val intervalNames = intervals.entries.associate { (k, v) -> v to k }
+ 
++    // Opcje promienia
++    val radiuses = listOf(5.0, 10.0, 25.0, 50.0, 100.0, 150.0, 200.0, 250.0)
++
+     // --- 1. POWIADOMIENIA ---
+     LaunchedEffect(userSelection.userId) {
+         if (userSelection.userId.isNotEmpty()) {
+@@ -90,44 +92,79 @@
+         }
+     }
+ 
+-    // --- 2. GPS LOGIKA ---
+-    var hasPermission by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) }
+-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+-        hasPermission = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
++    // --- 2. GPS LOGIKA (POPRAWIONA) ---
++    var hasPermission by remember {
++        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED)
+     }
++
++    val permissionLauncher = rememberLauncherForActivityResult(
++        contract = ActivityResultContracts.RequestMultiplePermissions(),
++        onResult = { permissions ->
++            hasPermission = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
++                    permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
++        }
++    )
+ 
+-    LaunchedEffect(Unit) { if (!hasPermission) permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)) }
++    // Pytamy o zgodę tylko raz przy starcie, jeśli jej nie ma
++    LaunchedEffect(Unit) {
++        if (!hasPermission) {
++            permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
++        }
++    }
+ 
+-    // Pętla GPS (reaguje na zmianę userSelection.locationUpdateInterval po zapisie ustawień)
+-    LaunchedEffect(userSelection.locationUpdateInterval, hasPermission) {
++    // Pętla odświeżania GPS
++    LaunchedEffect(userSelection.locationUpdateInterval, hasPermission, userSelection.shareLocation) {
+         if (hasPermission) {
+             while (isActive) {
+                 try {
++                    Log.d("GPS_TEST", "⏳ Cykl GPS: ${userSelection.locationUpdateInterval}ms")
++
+                     fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+                         if (location != null) {
+                             myLocation = LatLng(location.latitude, location.longitude)
++                            // Aktualizujemy lokalnie (żeby widzieć siebie na mapie)
+                             userSelection.location = GeoPoint(location.latitude, location.longitude)
+-                            FirebaseService.saveCurrentUser(userSelection) { FirebaseService.findMatches(userSelection) { otherUsers = it } }
++
++                            // Jeśli udostępnianie jest włączone -> Zapisz i Szukaj
++                            if (userSelection.shareLocation) {
++                                FirebaseService.saveCurrentUser(userSelection) {
++                                    FirebaseService.findMatches(userSelection) { otherUsers = it }
++                                }
++                            } else {
++                                // Jeśli udostępnianie wyłączone (Tryb Ducha) -> Tylko Szukaj
++                                Log.d("GPS_TEST", "👻 Tryb Ducha - nie wysyłam pozycji")
++                                FirebaseService.findMatches(userSelection) { otherUsers = it }
++                            }
+                         } else {
++                            // Fallback (wymuszenie)
+                             fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).addOnSuccessListener { l ->
+                                 if (l != null) {
+                                     myLocation = LatLng(l.latitude, l.longitude)
+                                     userSelection.location = GeoPoint(l.latitude, l.longitude)
+-                                    FirebaseService.saveCurrentUser(userSelection) { FirebaseService.findMatches(userSelection) { otherUsers = it } }
++
++                                    if (userSelection.shareLocation) {
++                                        FirebaseService.saveCurrentUser(userSelection) {
++                                            FirebaseService.findMatches(userSelection) { otherUsers = it }
++                                        }
++                                    } else {
++                                        FirebaseService.findMatches(userSelection) { otherUsers = it }
++                                    }
+                                 }
+                             }
+                         }
+                     }
+-                } catch (e: SecurityException) { }
++                } catch (e: SecurityException) {
++                    Log.e("GPS_TEST", "Błąd: ${e.message}")
++                }
+                 delay(userSelection.locationUpdateInterval)
+             }
+         }
+     }
+ 
+-    // --- 3. BUDOWANIE EKRANU ---
++    // --- 3. SKŁADANIE UI ---
+     Box(modifier = Modifier.fillMaxSize()) {
+ 
+-        // A. MAPA (z FourthStageComponents.kt)
++        // A. MAPA
+         FourthStageMap(
+             myLocation = myLocation,
+             otherUsers = otherUsers,
+@@ -137,21 +174,18 @@
+             onPermissionRequest = { permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)) }
+         )
+ 
+-        // B. POWIADOMIENIA (SNACKBAR)
++        // B. POWIADOMIENIA
+         SnackbarHost(hostState = snackbarHostState, modifier = Modifier.align(Alignment.TopCenter).padding(top = 50.dp))
+ 
+         // C. PRZYCISK USTAWIEŃ (Zębatka)
+         FourthStageSettingsFab(onClick = {
+-            // Pobieramy aktualne ustawienia do zmiennych tymczasowych przed otwarciem okna
+-            tempVisibilityMode = userSelection.visibilityMode
+-            tempInterval = userSelection.locationUpdateInterval
+             showSettingsDialog = true
+         })
+ 
+-        // D. DOLNY PANEL STEROWANIA (z FourthStageControls.kt)
++        // D. DOLNY PANEL STEROWANIA
+         FourthStageControls(
+             selectedUser = selectedUser,
+-            currentRefreshRate = userSelection.locationUpdateInterval, // Pokazuje aktualny czas
++            currentRefreshRate = userSelection.locationUpdateInterval,
+             onChatClick = { selectedUser?.let { onChatClick(it.userId, it.name) } },
+             onSendRequestClick = {
+                 selectedUser?.let {
+@@ -164,10 +198,11 @@
+             onCloseUserClick = { selectedUser = null },
+             onExitClick = onBackClick,
+             onFriendsListClick = onFriendsListClick,
++            onGroupsClick = onGroupsClick,
+             onMyProfileClick = onProfileClick
+         )
+ 
+-        // E. OKNO DIALOGOWE ZAPROSZENIA
++        // E. DIALOG ZAPROSZENIA
+         if (showFriendRequestDialog) {
+             FourthStageFriendRequestDialog(
+                 senderName = requestSenderName,
+@@ -181,34 +216,70 @@
+             )
+         }
+ 
+-        // F. OKNO DIALOGOWE USTAWIEŃ (Publiczny/Znajomi + Czas GPS)
++        // F. DIALOG USTAWIEŃ Z AUTO-ZAPISEM
+         if (showSettingsDialog) {
++            // Lokalne stany dla dropdownów
++            var expandedCategory by remember { mutableStateOf(false) }
++            var expandedIntervals by remember { mutableStateOf(false) }
++            var expandedRadius by remember { mutableStateOf(false) }
++
+             FourthStageSettingsDialog(
+-                tempVisibilityMode = tempVisibilityMode,
+-                onVisibilityChange = { tempVisibilityMode = it },
+-                tempInterval = tempInterval,
+-                onIntervalChange = { tempInterval = it },
++                // --- UDOSTĘPNIANIE LOKALIZACJI ---
++                isSharingLocation = userSelection.shareLocation,
++                onSharingChange = { isSharing ->
++                    userSelection.shareLocation = isSharing
++                    FirebaseService.updateFullProfile(userSelection, {
++                        val status = if(isSharing) "Jesteś widoczny" else "Tryb Ducha (Ukryty)"
++                        Toast.makeText(context, status, Toast.LENGTH_SHORT).show()
++                        // Odśwież mapę
++                        FirebaseService.findMatches(userSelection) { otherUsers = it }
++                    }, {})
++                },
++
++                // --- KATEGORIA ---
++                tempCategory = userSelection.category,
++                onCategoryChange = { newCat ->
++                    userSelection.category = newCat
++                    FirebaseService.updateFullProfile(userSelection, {
++                        Toast.makeText(context, "Zmieniono kategorię!", Toast.LENGTH_SHORT).show()
++                        FirebaseService.findMatches(userSelection) { otherUsers = it }
++                    }, {})
++                },
++                expandedCategory = expandedCategory,
++                onExpandedCategoryChange = { expandedCategory = it },
++
++                // --- WIDOCZNOŚĆ ---
++                tempVisibilityMode = userSelection.visibilityMode,
++                onVisibilityChange = { newMode ->
++                    userSelection.visibilityMode = newMode
++                    FirebaseService.updateFullProfile(userSelection, {}, {})
++                },
++
++                // --- CZAS GPS ---
++                tempInterval = userSelection.locationUpdateInterval,
++                onIntervalChange = { newInterval ->
++                    userSelection.locationUpdateInterval = newInterval
++                    FirebaseService.updateFullProfile(userSelection, {}, {})
++                },
+                 expandedIntervals = expandedIntervals,
+                 onExpandedChange = { expandedIntervals = it },
+                 intervalNames = intervalNames,
+                 intervals = intervals,
+-                onSave = {
+-                    // ZAPISUJEMY ZMIANY DO MODELU I DO BAZY
+-                    userSelection.visibilityMode = tempVisibilityMode
+-                    userSelection.locationUpdateInterval = tempInterval
+ 
+-                    FirebaseService.updateFullProfile(
+-                        user = userSelection,
+-                        onSuccess = {
+-                            Toast.makeText(context, "Zapisano ustawienia!", Toast.LENGTH_SHORT).show()
+-                            showSettingsDialog = false
+-                        },
+-                        onError = {
+-                            Toast.makeText(context, "Błąd zapisu", Toast.LENGTH_SHORT).show()
+-                        }
+-                    )
++                // --- PROMIEŃ ---
++                tempRadius = userSelection.searchRadiusKm,
++                onRadiusChange = { newRadius ->
++                    userSelection.searchRadiusKm = newRadius
++                    FirebaseService.updateFullProfile(userSelection, {
++                        FirebaseService.findMatches(userSelection) { otherUsers = it }
++                    }, {})
+                 },
+-                onCancel = { showSettingsDialog = false }
++                expandedRadius = expandedRadius,
++                onExpandedRadiusChange = { expandedRadius = it },
++                radiuses = radiuses,
++
++                // ZAMKNIĘCIE
++                onClose = { showSettingsDialog = false }
+             )
+         }
+     }
+Index: app/src/main/java/pl/example/connectnear/ChatRepo.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/ChatRepo.kt b/app/src/main/java/pl/example/connectnear/ChatRepo.kt
+new file mode 100644
+--- /dev/null
++++ b/app/src/main/java/pl/example/connectnear/ChatRepo.kt
+@@ -0,0 +1,93 @@
++package pl.example.connectnear
++
++import android.net.Uri
++import com.google.firebase.firestore.FirebaseFirestore
++import com.google.firebase.firestore.Query
++import com.google.firebase.storage.FirebaseStorage
++import java.util.UUID
++
++object ChatRepo {
++    private val db = FirebaseFirestore.getInstance()
++    private val storage = FirebaseStorage.getInstance()
++
++    fun getChatId(user1: String, user2: String): String = if (user1 < user2) "${user1}_$user2" else "${user2}_$user1"
++
++    // W pliku ChatRepo.kt
++
++    fun sendMessage(chatId: String, message: ChatMessage, receiverId: String, senderName: String, isGroup: Boolean = false) {
++        db.collection("chats").document(chatId).collection("messages").add(message)
++
++        // Aktualizujemy ostatnią wiadomość (dla grup ważne, dla priv opcjonalne)
++        if (isGroup) {
++            db.collection("groups").document(chatId).update(
++                "lastMessage", "${senderName}: ${if(message.text.isNotEmpty()) message.text else "Plik"}",
++                "timestamp", System.currentTimeMillis()
++            )
++
++            // Powiadomienia dla wszystkich członków grupy
++            db.collection("groups").document(chatId).get().addOnSuccessListener { doc ->
++                val members = doc.get("memberIds") as? List<String> ?: emptyList()
++                val notif = hashMapOf(
++                    "type" to "message",
++                    "senderName" to (if(isGroup) "Grupa" else senderName),
++                    "text" to "$senderName: ${if(message.text.isNotEmpty()) message.text else "Wysłano plik"}",
++                    "read" to false,
++                    "timestamp" to System.currentTimeMillis()
++                )
++
++                members.forEach { memberId ->
++                    if (memberId != message.senderId) { // Nie wysyłaj powiadomienia do siebie
++                        db.collection("users").document(memberId).collection("notifications").add(notif)
++                    }
++                }
++            }
++        } else {
++            // Stara logika dla czatu prywatnego (1 na 1)
++            val notif = hashMapOf(
++                "type" to "message",
++                "senderName" to senderName,
++                "senderId" to message.senderId,
++                "text" to (if(message.text.isNotEmpty()) message.text else "Plik"),
++                "read" to false,
++                "timestamp" to System.currentTimeMillis()
++            )
++            db.collection("users").document(receiverId).collection("notifications").add(notif)
++        }
++    }
++
++
++    fun getMessages(chatId: String, onUpdate: (List<ChatMessage>) -> Unit) {
++        db.collection("chats").document(chatId).collection("messages")
++            .orderBy("timestamp", Query.Direction.ASCENDING)
++            .addSnapshotListener { v, _ ->
++                onUpdate(v?.toObjects(ChatMessage::class.java) ?: emptyList())
++            }
++    }
++
++    fun uploadFileToStorage(uri: Uri, folder: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
++        val filename = "${UUID.randomUUID()}"
++        val ref = storage.reference.child("$folder/$filename")
++        ref.putFile(uri).continueWithTask { task ->
++            if (!task.isSuccessful) task.exception?.let { throw it }
++            ref.downloadUrl
++        }.addOnCompleteListener { task ->
++            if (task.isSuccessful) onSuccess(task.result.toString()) else onError(task.exception?.message ?: "")
++        }
++    }
++
++    fun listenForNotifications(myUserId: String, onNewNotification: (Map<String, Any>) -> Unit) {
++        db.collection("users").document(myUserId).collection("notifications")
++            .whereEqualTo("read", false)
++            .addSnapshotListener { snapshots, e ->
++                if (e != null) return@addSnapshotListener
++                for (dc in snapshots!!.documentChanges) {
++                    if (dc.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
++                        val data = dc.document.data.toMutableMap()
++                        data["id"] = dc.document.id
++                        onNewNotification(data)
++                        db.collection("users").document(myUserId).collection("notifications").document(dc.document.id).update("read", true)
++                    }
++                }
++            }
++    }
++}
+Index: app/src/main/java/pl/example/connectnear/GroupRepo.kt
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/GroupRepo.kt b/app/src/main/java/pl/example/connectnear/GroupRepo.kt
+new file mode 100644
+--- /dev/null
++++ b/app/src/main/java/pl/example/connectnear/GroupRepo.kt
+@@ -0,0 +1,75 @@
++package pl.example.connectnear
++
++import com.google.firebase.firestore.FieldValue
++import com.google.firebase.firestore.FirebaseFirestore
++import java.util.UUID
++
++object GroupRepo {
++    private val db = FirebaseFirestore.getInstance()
++
++    // Tworzenie grupy (teraz z opcją Publiczna/Prywatna)
++    fun createGroup(groupName: String, ownerId: String, memberIds: List<String>, isPublic: Boolean, onSuccess: () -> Unit) {
++        val groupId = UUID.randomUUID().toString()
++        val allMembers = memberIds + ownerId
++
++        val groupData = hashMapOf(
++            "groupId" to groupId,
++            "name" to groupName,
++            "ownerId" to ownerId,
++            "memberIds" to allMembers,
++            "lastMessage" to "Utworzono grupę",
++            "timestamp" to System.currentTimeMillis(),
++            "isPublic" to isPublic,
++            "pendingRequests" to emptyList<String>()
++        )
++
++        db.collection("groups").document(groupId).set(groupData)
++            .addOnSuccessListener { onSuccess() }
++    }
++
++    // Pobieranie MOICH grup
++    fun getMyGroups(myUserId: String, onSuccess: (List<Group>) -> Unit) {
++        db.collection("groups")
++            .whereArrayContains("memberIds", myUserId)
++            .addSnapshotListener { value, error ->
++                if (error != null) return@addSnapshotListener
++                val groups = value?.toObjects(Group::class.java) ?: emptyList()
++                onSuccess(groups.sortedByDescending { it.timestamp })
++            }
++    }
++
++    // Pobieranie PUBLICZNYCH grup (których nie jestem członkiem)
++    fun getPublicGroups(onSuccess: (List<Group>) -> Unit) {
++        db.collection("groups")
++            .whereEqualTo("isPublic", true)
++            .get()
++            .addOnSuccessListener { documents ->
++                val groups = documents.toObjects(Group::class.java)
++                onSuccess(groups)
++            }
++    }
++
++    // Wyślij prośbę o dołączenie
++    fun requestJoinGroup(groupId: String, myUserId: String, onSuccess: () -> Unit) {
++        db.collection("groups").document(groupId)
++            .update("pendingRequests", FieldValue.arrayUnion(myUserId))
++            .addOnSuccessListener { onSuccess() }
++    }
++
++    // Zaakceptuj prośbę (Tylko Lider)
++    fun approveRequest(groupId: String, userIdToApprove: String, onSuccess: () -> Unit) {
++        db.collection("groups").document(groupId)
++            .update(
++                "pendingRequests", FieldValue.arrayRemove(userIdToApprove),
++                "memberIds", FieldValue.arrayUnion(userIdToApprove)
++            )
++            .addOnSuccessListener { onSuccess() }
++    }
++
++    // Odrzuć prośbę (Tylko Lider)
++    fun rejectRequest(groupId: String, userIdToReject: String, onSuccess: () -> Unit) {
++        db.collection("groups").document(groupId)
++            .update("pendingRequests", FieldValue.arrayRemove(userIdToReject))
++            .addOnSuccessListener { onSuccess() }
++    }
++}
+Index: app/src/main/java/pl/example/connectnear/GroupsScreen.kt
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/GroupsScreen.kt b/app/src/main/java/pl/example/connectnear/GroupsScreen.kt
+new file mode 100644
+--- /dev/null
++++ b/app/src/main/java/pl/example/connectnear/GroupsScreen.kt
+@@ -0,0 +1,296 @@
++package pl.example.connectnear
++
++import android.widget.Toast
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.*
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.filled.Add
++import androidx.compose.material.icons.filled.Check
++import androidx.compose.material.icons.filled.Close
++import androidx.compose.material.icons.filled.Person
++import androidx.compose.material3.*
++import androidx.compose.runtime.*
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Brush
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.platform.LocalContext
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++
++@Composable
++fun GroupsScreen(
++    myUserId: String,
++    onBackClick: () -> Unit,
++    onGroupClick: (String, String) -> Unit
++) {
++    var selectedTab by remember { mutableStateOf(0) } // 0 = Moje, 1 = Szukaj
++    var myGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
++    var publicGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
++    var showCreateDialog by remember { mutableStateOf(false) }
++    var showRequestsDialog by remember { mutableStateOf<Group?>(null) }
++
++    val context = LocalContext.current
++
++    // Pobieranie danych
++    LaunchedEffect(selectedTab) {
++        if (selectedTab == 0) {
++            FirebaseService.getMyGroups(myUserId) { myGroups = it }
++        } else {
++            FirebaseService.getPublicGroups { allPublic ->
++                // Pokazuj tylko te, do których NIE należę
++                publicGroups = allPublic.filter { !it.memberIds.contains(myUserId) }
++            }
++        }
++    }
++
++    Box(
++        modifier = Modifier
++            .fillMaxSize()
++            .background(Brush.verticalGradient(colors = listOf(Color(0xFF0AA4F4), Color(0xFF1CD9C3))))
++    ) {
++        Column(modifier = Modifier.padding(16.dp)) {
++            // Nagłówek
++            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 16.dp)) {
++                Button(onClick = onBackClick, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)) {
++                    Text("< Wróć")
++                }
++                Spacer(modifier = Modifier.width(16.dp))
++                Text("Grupy", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
++            }
++
++            // Zakładki
++            Row(modifier = Modifier.fillMaxWidth().background(Color.White.copy(0.2f), RoundedCornerShape(16.dp)).padding(4.dp)) {
++                TabButton("Moje Grupy", selectedTab == 0) { selectedTab = 0 }
++                TabButton("Szukaj Publicznych", selectedTab == 1) { selectedTab = 1 }
++            }
++            Spacer(modifier = Modifier.height(16.dp))
++
++            // Lista
++            LazyColumn {
++                if (selectedTab == 0) {
++                    // --- MOJE GRUPY ---
++                    if (myGroups.isEmpty()) item { Text("Brak grup.", color = Color.White) }
++
++                    items(myGroups) { group ->
++                        Card(
++                            modifier = Modifier
++                                .fillMaxWidth()
++                                .padding(vertical = 4.dp)
++                                .clickable { onGroupClick(group.groupId, group.name) },
++                            shape = RoundedCornerShape(12.dp),
++                            colors = CardDefaults.cardColors(containerColor = Color.White)
++                        ) {
++                            Column(modifier = Modifier.padding(16.dp)) {
++                                Row(verticalAlignment = Alignment.CenterVertically) {
++                                    Text(group.name, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.Black)
++                                    Spacer(modifier = Modifier.weight(1f))
++                                    if (group.isPublic) Text("Publiczna", fontSize = 10.sp, color = Color.Blue) else Text("Prywatna", fontSize = 10.sp, color = Color.Gray)
++                                }
++                                Text(group.lastMessage, color = Color.Gray, fontSize = 14.sp, maxLines = 1)
++
++                                // Jeśli jestem właścicielem i są prośby
++                                if (group.ownerId == myUserId && group.pendingRequests.isNotEmpty()) {
++                                    Spacer(modifier = Modifier.height(8.dp))
++                                    Button(
++                                        onClick = { showRequestsDialog = group }, // Pokaż dialog
++                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
++                                        modifier = Modifier.fillMaxWidth().height(35.dp)
++                                    ) {
++                                        Text("Oczekujące prośby: ${group.pendingRequests.size}")
++                                    }
++                                }
++                            }
++                        }
++                    }
++                } else {
++                    // --- SZUKAJ PUBLICZNYCH ---
++                    if (publicGroups.isEmpty()) item { Text("Brak nowych grup publicznych.", color = Color.White) }
++
++                    items(publicGroups) { group ->
++                        val isPending = group.pendingRequests.contains(myUserId)
++
++                        Card(
++                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
++                            shape = RoundedCornerShape(12.dp),
++                            colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.9f))
++                        ) {
++                            Row(
++                                modifier = Modifier.padding(16.dp),
++                                verticalAlignment = Alignment.CenterVertically,
++                                horizontalArrangement = Arrangement.SpaceBetween
++                            ) {
++                                Column(modifier = Modifier.weight(1f)) {
++                                    Text(group.name, fontWeight = FontWeight.Bold, fontSize = 18.sp)
++                                    Text("Publiczna • ${group.memberIds.size} członków", fontSize = 12.sp, color = Color.Gray)
++                                }
++
++                                Button(
++                                    onClick = {
++                                        if (!isPending) {
++                                            FirebaseService.requestJoinGroup(group.groupId, myUserId) {
++                                                Toast.makeText(context, "Wysłano prośbę!", Toast.LENGTH_SHORT).show()
++                                                // Odśwież listę (prowizorycznie)
++                                                selectedTab = 1
++                                            }
++                                        }
++                                    },
++                                    enabled = !isPending,
++                                    colors = ButtonDefaults.buttonColors(containerColor = if (isPending) Color.Gray else Color(0xFF00C853))
++                                ) {
++                                    Text(if (isPending) "Wysłano" else "Dołącz")
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++
++        // Przycisk dodawania
++        if (selectedTab == 0) {
++            FloatingActionButton(
++                onClick = { showCreateDialog = true },
++                containerColor = Color.White,
++                contentColor = Color.Black,
++                modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp)
++            ) {
++                Icon(Icons.Default.Add, contentDescription = "Utwórz grupę")
++            }
++        }
++
++        // Dialogi
++        if (showCreateDialog) {
++            CreateGroupDialog(myUserId, { showCreateDialog = false }, { showCreateDialog = false })
++        }
++
++        if (showRequestsDialog != null) {
++            ManageRequestsDialog(
++                group = showRequestsDialog!!,
++                onDismiss = { showRequestsDialog = null },
++                onProcessed = { showRequestsDialog = null } // Zamknij po akcji
++            )
++        }
++    }
++}
++
++@Composable
++fun RowScope.TabButton(text: String, isSelected: Boolean, onClick: () -> Unit) {
++    Button(
++        onClick = onClick,
++        modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
++        colors = ButtonDefaults.buttonColors(containerColor = if (isSelected) Color(0xFF006400) else Color.Transparent),
++        elevation = null
++    ) {
++        Text(text, color = if (isSelected) Color.White else Color.Black)
++    }
++}
++
++@Composable
++fun CreateGroupDialog(myUserId: String, onDismiss: () -> Unit, onGroupCreated: () -> Unit) {
++    var groupName by remember { mutableStateOf("") }
++    var isPublic by remember { mutableStateOf(false) } // Wybór: Publiczna/Prywatna
++    var myFriends by remember { mutableStateOf<List<FoundUser>>(emptyList()) }
++    var selectedFriends by remember { mutableStateOf<Set<String>>(emptySet()) }
++    var isLoading by remember { mutableStateOf(true) }
++
++    LaunchedEffect(Unit) {
++        FirebaseService.getFriends(myUserId) { myFriends = it; isLoading = false }
++    }
++
++    AlertDialog(
++        onDismissRequest = onDismiss,
++        title = { Text("Nowa Grupa") },
++        text = {
++            Column {
++                OutlinedTextField(value = groupName, onValueChange = { groupName = it }, label = { Text("Nazwa grupy") }, modifier = Modifier.fillMaxWidth())
++
++                Spacer(modifier = Modifier.height(10.dp))
++
++                // Wybór typu
++                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { isPublic = !isPublic }) {
++                    Checkbox(checked = isPublic, onCheckedChange = { isPublic = it })
++                    Text("Grupa Publiczna (Inni mogą prosić o dołączenie)")
++                }
++
++                Spacer(modifier = Modifier.height(10.dp))
++                Text("Zaproś znajomych:", fontWeight = FontWeight.Bold)
++
++                if (isLoading) CircularProgressIndicator() else {
++                    Box(modifier = Modifier.height(150.dp)) {
++                        LazyColumn {
++                            items(myFriends) { friend ->
++                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable {
++                                    selectedFriends = if (selectedFriends.contains(friend.userId)) selectedFriends - friend.userId else selectedFriends + friend.userId
++                                }) {
++                                    Checkbox(checked = selectedFriends.contains(friend.userId), onCheckedChange = null)
++                                    Text(friend.name)
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        },
++        confirmButton = {
++            Button(onClick = {
++                if (groupName.isNotBlank()) {
++                    FirebaseService.createGroup(groupName, myUserId, selectedFriends.toList(), isPublic) { onGroupCreated() }
++                }
++            }, enabled = groupName.isNotBlank()) { Text("Utwórz") }
++        },
++        dismissButton = { Button(onClick = onDismiss) { Text("Anuluj") } }
++    )
++}
++
++@Composable
++fun ManageRequestsDialog(group: Group, onDismiss: () -> Unit, onProcessed: () -> Unit) {
++    // Tu pobieramy imiona osób czekających (uproszczona wersja - wyświetla ID, w pełnej wersji trzeba pobrać profile)
++    // W prawdziwej apce trzeba by pobrać listę UserSelection dla każdego ID z pendingRequests
++
++    AlertDialog(
++        onDismissRequest = onDismiss,
++        title = { Text("Prośby o dołączenie") },
++        text = {
++            if (group.pendingRequests.isEmpty()) {
++                Text("Brak oczekujących próśb.")
++            } else {
++                LazyColumn {
++                    items(group.pendingRequests) { userId ->
++                        // W tym miejscu w idealnym świecie pobieramy imię usera.
++                        // Tutaj dla prostoty wyświetlamy "Użytkownik..." i przyciski.
++                        Row(
++                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
++                            horizontalArrangement = Arrangement.SpaceBetween,
++                            verticalAlignment = Alignment.CenterVertically
++                        ) {
++                            Icon(Icons.Default.Person, null)
++                            // W prawdziwym kodzie: Text(userName)
++                            Text("Osoba ID: ...${userId.takeLast(4)}")
++
++                            Row {
++                                IconButton(onClick = {
++                                    FirebaseService.approveRequest(group.groupId, userId) { onProcessed() }
++                                }) { Icon(Icons.Default.Check, null, tint = Color.Green) }
++
++                                IconButton(onClick = {
++                                    FirebaseService.rejectRequest(group.groupId, userId) { onProcessed() }
++                                }) { Icon(Icons.Default.Close, null, tint = Color.Red) }
++                            }
++                        }
++                    }
++                }
++            }
++        },
++        confirmButton = {
++            Button(onClick = onDismiss) { Text("Zamknij") }
++        }
++    )
++}
+Index: app/src/main/java/pl/example/connectnear/IndexFixer.kt
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/IndexFixer.kt b/app/src/main/java/pl/example/connectnear/IndexFixer.kt
+new file mode 100644
+--- /dev/null
++++ b/app/src/main/java/pl/example/connectnear/IndexFixer.kt
+@@ -0,0 +1,29 @@
++package pl.example.connectnear
++
++import android.util.Log
++import com.google.firebase.firestore.FirebaseFirestore
++
++object IndexFixer {
++
++    // Ta funkcja służy TYLKO do wygenerowania linku w Logcat
++    fun wymusLinkDoIndeksu() {
++        val db = FirebaseFirestore.getInstance()
++
++        Log.e("IndexFixer", ">>> ROZPOCZYNAM WYMUSZANIE BŁĘDU INDEKSU... <<<")
++
++        // 1. Symulujemy najtrudniejsze zapytanie (Czas + Lokalizacja + Kategoria)
++        db.collection("users")
++            .whereEqualTo("shareLocation", true)
++            .whereEqualTo("category", "Sport") // Przykładowa kategoria
++            .whereGreaterThan("timestamp", 1000L) // Przykładowy czas
++            .get()
++            .addOnSuccessListener {
++                Log.e("IndexFixer", "⚠️ O dziwo zadziałało bez błędu! Spróbuj zmienić kategorię w kodzie.")
++            }
++            .addOnFailureListener { e ->
++                Log.e("IndexFixer", "!!! OTO TWÓJ LINK DO KLIKNIĘCIA PONIŻEJ !!!")
++                Log.e("IndexFixer", e.message ?: "Brak komunikatu")
++                Log.e("IndexFixer", "------------------------------------------------")
++            }
++    }
++}
+Index: app/src/main/java/pl/example/connectnear/ChatRep.kt
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/ChatRep.kt b/app/src/main/java/pl/example/connectnear/ChatRep.kt
+deleted file mode 100644
+--- a/app/src/main/java/pl/example/connectnear/ChatRep.kt
++++ /dev/null
+@@ -1,62 +0,0 @@
+-package pl.example.connectnear
+-
+-import android.net.Uri
+-import com.google.firebase.firestore.FirebaseFirestore
+-import com.google.firebase.firestore.Query
+-import com.google.firebase.storage.FirebaseStorage
+-import java.util.UUID
+-
+-object ChatRepo {
+-    private val db = FirebaseFirestore.getInstance()
+-    private val storage = FirebaseStorage.getInstance()
+-
+-    fun getChatId(user1: String, user2: String): String = if (user1 < user2) "${user1}_$user2" else "${user2}_$user1"
+-
+-    fun sendMessage(chatId: String, message: ChatMessage, receiverId: String, senderName: String) {
+-        db.collection("chats").document(chatId).collection("messages").add(message)
+-        val notif = hashMapOf(
+-            "type" to "message",
+-            "senderName" to senderName,
+-            "senderId" to message.senderId,
+-            "text" to (if(message.text.isNotEmpty()) message.text else "Plik"),
+-            "read" to false,
+-            "timestamp" to System.currentTimeMillis()
+-        )
+-        db.collection("users").document(receiverId).collection("notifications").add(notif)
+-    }
+-
+-    fun getMessages(chatId: String, onUpdate: (List<ChatMessage>) -> Unit) {
+-        db.collection("chats").document(chatId).collection("messages")
+-            .orderBy("timestamp", Query.Direction.ASCENDING)
+-            .addSnapshotListener { v, _ ->
+-                onUpdate(v?.toObjects(ChatMessage::class.java) ?: emptyList())
+-            }
+-    }
+-
+-    fun uploadFileToStorage(uri: Uri, folder: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) {
+-        val filename = "${UUID.randomUUID()}"
+-        val ref = storage.reference.child("$folder/$filename")
+-        ref.putFile(uri).continueWithTask { task ->
+-            if (!task.isSuccessful) task.exception?.let { throw it }
+-            ref.downloadUrl
+-        }.addOnCompleteListener { task ->
+-            if (task.isSuccessful) onSuccess(task.result.toString()) else onError(task.exception?.message ?: "")
+-        }
+-    }
+-
+-    fun listenForNotifications(myUserId: String, onNewNotification: (Map<String, Any>) -> Unit) {
+-        db.collection("users").document(myUserId).collection("notifications")
+-            .whereEqualTo("read", false)
+-            .addSnapshotListener { snapshots, e ->
+-                if (e != null) return@addSnapshotListener
+-                for (dc in snapshots!!.documentChanges) {
+-                    if (dc.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
+-                        val data = dc.document.data.toMutableMap()
+-                        data["id"] = dc.document.id
+-                        onNewNotification(data)
+-                        db.collection("users").document(myUserId).collection("notifications").document(dc.document.id).update("read", true)
+-                    }
+-                }
+-            }
+-    }
+-}
+Index: app/src/main/java/pl/example/connectnear/FourthStageComponents.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/FourthStageComponents.kt b/app/src/main/java/pl/example/connectnear/FourthStageComponents.kt
+--- a/app/src/main/java/pl/example/connectnear/FourthStageComponents.kt
++++ b/app/src/main/java/pl/example/connectnear/FourthStageComponents.kt
+@@ -11,6 +11,7 @@
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
+ import com.google.android.gms.maps.model.BitmapDescriptorFactory
+ import com.google.android.gms.maps.model.CameraPosition
+ import com.google.android.gms.maps.model.LatLng
+@@ -111,39 +112,140 @@
+     )
+ }
+ 
+-// --- 4. DIALOG USTAWIEŃ ---
++// --- 4. DIALOG USTAWIEŃ (Z LOKALIZACJĄ) ---
+ @Composable
+ fun FourthStageSettingsDialog(
++    // NOWE: WŁĄCZANIE/WYŁĄCZANIE LOKALIZACJI
++    isSharingLocation: Boolean,
++    onSharingChange: (Boolean) -> Unit,
++
++    // KATEGORIA
++    tempCategory: String,
++    onCategoryChange: (String) -> Unit,
++    expandedCategory: Boolean,
++    onExpandedCategoryChange: (Boolean) -> Unit,
++
++    // WIDOCZNOŚĆ
+     tempVisibilityMode: String,
+     onVisibilityChange: (String) -> Unit,
++
++    // CZAS GPS
+     tempInterval: Long,
+     onIntervalChange: (Long) -> Unit,
+     expandedIntervals: Boolean,
+     onExpandedChange: (Boolean) -> Unit,
+     intervalNames: Map<Long, String>,
+     intervals: Map<String, Long>,
+-    onSave: () -> Unit,
+-    onCancel: () -> Unit
++
++    // PROMIEŃ
++    tempRadius: Double,
++    onRadiusChange: (Double) -> Unit,
++    expandedRadius: Boolean,
++    onExpandedRadiusChange: (Boolean) -> Unit,
++    radiuses: List<Double>,
++
++    onClose: () -> Unit
+ ) {
++    val categories = listOf("Impreza", "Sport", "Podwójne randki", "Kawa", "Spacer", "Wspólna gra")
++
+     AlertDialog(
+-        onDismissRequest = onCancel,
+-        title = { Text("Ustawienia Mapy") },
++        onDismissRequest = onClose,
++        title = { Text("Szybkie Ustawienia") },
+         text = {
+             Column {
+-                Text("Widoczność:", fontWeight = FontWeight.Bold)
++                // --- PRZEŁĄCZNIK: WIDOCZNOŚĆ NA MAPIE ---
++                Row(
++                    modifier = Modifier.fillMaxWidth(),
++                    verticalAlignment = Alignment.CenterVertically,
++                    horizontalArrangement = Arrangement.SpaceBetween
++                ) {
++                    Text("Udostępniaj lokalizację:", fontWeight = FontWeight.Bold)
++                    Switch(
++                        checked = isSharingLocation,
++                        onCheckedChange = {
++                            onSharingChange(it) // Auto-zapis
++                        }
++                    )
++                }
++                Text(
++                    text = if(isSharingLocation) "Jesteś widoczny na mapie" else "Jesteś niewidoczny (Tryb Ducha)",
++                    fontSize = 12.sp,
++                    color = if(isSharingLocation) Color(0xFF006400) else Color.Red
++                )
++
++                Divider(modifier = Modifier.padding(vertical = 12.dp))
++
++                // --- KATEGORIA ---
++                Text("Moja Kategoria:", fontWeight = FontWeight.Bold)
++                Box(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
++                    Button(
++                        onClick = { onExpandedCategoryChange(true) },
++                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0AA4F4)),
++                        modifier = Modifier.fillMaxWidth(),
++                        enabled = isSharingLocation // Blokujemy zmianę jak wyłączone
++                    ) {
++                        Text(
++                            text = if (tempCategory.isEmpty()) "Wybierz kategorię" else tempCategory,
++                            color = Color.White
++                        )
++                    }
++                    DropdownMenu(
++                        expanded = expandedCategory,
++                        onDismissRequest = { onExpandedCategoryChange(false) }
++                    ) {
++                        categories.forEach { cat ->
++                            DropdownMenuItem(
++                                text = { Text(cat) },
++                                onClick = {
++                                    onCategoryChange(cat)
++                                    onExpandedCategoryChange(false)
++                                }
++                            )
++                        }
++                        DropdownMenuItem(
++                            text = { Text("Bez kategorii") },
++                            onClick = { onCategoryChange(""); onExpandedCategoryChange(false) }
++                        )
++                    }
++                }
++
++                // --- WIDOCZNOŚĆ ---
++                Text("Kto może mnie widzieć?", fontWeight = FontWeight.Bold)
+                 Row(verticalAlignment = Alignment.CenterVertically) {
+-                    RadioButton(selected = tempVisibilityMode == "public", onClick = { onVisibilityChange("public") })
+-                    Text("Wszyscy", modifier = Modifier.clickable { onVisibilityChange("public") })
++                    RadioButton(selected = tempVisibilityMode == "public", onClick = { onVisibilityChange("public") }, enabled = isSharingLocation)
++                    Text("Wszyscy", modifier = Modifier.clickable { if(isSharingLocation) onVisibilityChange("public") }, color = if(isSharingLocation) Color.Black else Color.Gray)
++
++                    Spacer(modifier = Modifier.width(10.dp))
++
++                    RadioButton(selected = tempVisibilityMode == "friends", onClick = { onVisibilityChange("friends") }, enabled = isSharingLocation)
++                    Text("Znajomi", modifier = Modifier.clickable { if(isSharingLocation) onVisibilityChange("friends") }, color = if(isSharingLocation) Color.Black else Color.Gray)
+                 }
+-                Row(verticalAlignment = Alignment.CenterVertically) {
+-                    RadioButton(selected = tempVisibilityMode == "friends", onClick = { onVisibilityChange("friends") })
+-                    Text("Tylko Znajomi", modifier = Modifier.clickable { onVisibilityChange("friends") })
++
++                Spacer(modifier = Modifier.height(8.dp))
++
++                // --- PROMIEŃ ---
++                Text("Promień wyszukiwania:", fontWeight = FontWeight.Bold)
++                Box {
++                    Button(onClick = { onExpandedRadiusChange(true) }, colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray)) {
++                        Text("${tempRadius.toInt()} km", color = Color.Black)
++                    }
++                    DropdownMenu(expanded = expandedRadius, onDismissRequest = { onExpandedRadiusChange(false) }) {
++                        radiuses.forEach { radius ->
++                            DropdownMenuItem(
++                                text = { Text("${radius.toInt()} km") },
++                                onClick = { onRadiusChange(radius); onExpandedRadiusChange(false) }
++                            )
++                        }
++                    }
+                 }
+-                Spacer(modifier = Modifier.height(16.dp))
++
++                Spacer(modifier = Modifier.height(8.dp))
++
++                // --- CZAS GPS ---
+                 Text("Odświeżanie GPS:", fontWeight = FontWeight.Bold)
+                 Box {
+-                    Button(onClick = { onExpandedChange(true) }, colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray)) {
+-                        Text(intervalNames[tempInterval] ?: "Wybierz", color = Color.Black)
++                    Button(onClick = { onExpandedChange(true) }, colors = ButtonDefaults.buttonColors(containerColor = Color.LightGray), enabled = isSharingLocation) {
++                        Text(intervalNames[tempInterval] ?: "Wybierz", color = if(isSharingLocation) Color.Black else Color.Gray)
+                     }
+                     DropdownMenu(expanded = expandedIntervals, onDismissRequest = { onExpandedChange(false) }) {
+                         intervals.forEach { (l, v) ->
+@@ -154,10 +256,7 @@
+             }
+         },
+         confirmButton = {
+-            Button(onClick = onSave) { Text("Zapisz") }
+-        },
+-        dismissButton = {
+-            Button(onClick = onCancel, colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) { Text("Anuluj") }
++            Button(onClick = onClose) { Text("Zamknij") }
+         }
+     )
+ }
