@@ -175,12 +175,34 @@ fun FourthStage(
             FourthStageFriendRequestDialog(
                 senderName = request.senderName,
                 onAccept = {
-                    FirebaseService.acceptFriendRequest(userSelection.userId, request.senderId, request.senderName) {
-                        Toast.makeText(context, "Dodano ${request.senderName} do znajomych!", Toast.LENGTH_SHORT).show()
-                        mapState.onFriendRequestHandled()
-                    }
+                    FirebaseService.acceptFriendRequest(
+                        myUserId = userSelection.userId,
+                        senderId = request.senderId,
+                        senderName = request.senderName,
+                        onSuccess = {
+                            Toast.makeText(context, "Dodano ${request.senderName} do znajomych!", Toast.LENGTH_SHORT).show()
+                            mapState.onFriendRequestHandled()
+                        },
+                        onError = { error ->
+                            Toast.makeText(context, "Błąd: $error", Toast.LENGTH_SHORT).show()
+                            mapState.onFriendRequestHandled()
+                        }
+                    )
                 },
-                onReject = { mapState.onFriendRequestHandled() }
+                onReject = {
+                    FirebaseService.rejectFriendRequest(
+                        myUserId = userSelection.userId,
+                        senderId = request.senderId,
+                        onSuccess = {
+                            Toast.makeText(context, "Odrzucono zaproszenie.", Toast.LENGTH_SHORT).show()
+                            mapState.onFriendRequestHandled()
+                        },
+                        onError = { error ->
+                            Toast.makeText(context, "Błąd: $error", Toast.LENGTH_SHORT).show()
+                            mapState.onFriendRequestHandled()
+                        }
+                    )
+                }
             )
         }
 

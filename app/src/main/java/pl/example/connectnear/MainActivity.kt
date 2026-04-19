@@ -39,7 +39,6 @@ class MainActivity : ComponentActivity() {
             ConnectNearTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
                     val navController = rememberNavController()
-                    val userSelection = remember { UserSelection() }
                     val context = LocalContext.current
 
                     val locationPermissionRequest = rememberLauncherForActivityResult(
@@ -65,7 +64,6 @@ class MainActivity : ComponentActivity() {
                     val currentRoute = navBackStackEntry?.destination?.route
                     val bottomBarVisibleRoutes = listOf("fourth_stage", "friends_list_screen", "groups_screen", "ai_screen", "profile_screen", "events_screen")
 
-                    // Ustawiamy containerColor na Transparent, aby tło ekranów było widoczne pod paskami systemowymi
                     Scaffold(
                         containerColor = Color.Transparent,
                         bottomBar = { 
@@ -75,9 +73,9 @@ class MainActivity : ComponentActivity() {
                         }
                     ) { paddingValues ->
                         Box(modifier = Modifier.padding(paddingValues)) {
+                            // POPRAWKA: Usunięto parametr userSelection
                             AppNavigation(
                                 navController = navController,
-                                userSelection = userSelection,
                                 startDestination = startDestination
                             )
                         }

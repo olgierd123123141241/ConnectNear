@@ -289,11 +289,28 @@ private fun BottomInputPanel(
     } else {
         Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             // if (isAiAvailable) { // Tymczasowo wyłączone
-            //     IconButton(onClick = onAiClick) { Icon(Icons.Default.Star, "Asystent AI") } // Zmieniono ikonę
+            //     IconButton(onClick = onAiClick) { Icon(Icons.Default.Star, "Asystent AI", tint = Color.White) } // Zmieniono ikonę
             // }
-            IconButton(onClick = onImageClick) { Icon(Icons.Default.Photo, "Obraz") }
-            IconButton(onClick = onFileClick) { Icon(Icons.Default.AttachFile, "Plik") }
-            TextField(value = messageText, onValueChange = onMessageChange, modifier = Modifier.weight(1f), placeholder = { Text("Wiadomość...") }, shape = RoundedCornerShape(20.dp))
+            IconButton(onClick = onImageClick) { Icon(Icons.Default.Photo, "Obraz", tint = Color.White) }
+            IconButton(onClick = onFileClick) { Icon(Icons.Default.AttachFile, "Plik", tint = Color.White) }
+            TextField(
+                value = messageText, 
+                onValueChange = onMessageChange, 
+                modifier = Modifier.weight(1f), 
+                placeholder = { Text("Wiadomość...", color = Color.LightGray) }, 
+                shape = RoundedCornerShape(20.dp),
+                colors = TextFieldDefaults.colors(
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    cursorColor = Color.White,
+                    focusedContainerColor = Color.Black.copy(alpha = 0.2f),
+                    unfocusedContainerColor = Color.Black.copy(alpha = 0.2f),
+                    disabledContainerColor = Color.Black.copy(alpha = 0.2f),
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent
+                )
+            )
             Spacer(Modifier.width(8.dp))
             if (messageText.isNotBlank()) Button(onClick = onSendClick, shape = RoundedCornerShape(50)) { Icon(Icons.Default.Send, "Wyślij") } else Button(onClick = onMicClick, shape = RoundedCornerShape(50)) { Icon(Icons.Default.Mic, "Nagraj") }
         }

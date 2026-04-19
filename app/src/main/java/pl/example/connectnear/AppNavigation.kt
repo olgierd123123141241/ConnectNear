@@ -4,10 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -25,16 +22,16 @@ import java.nio.charset.StandardCharsets
 @Composable
 fun AppNavigation(
     navController: NavHostController,
-    userSelection: UserSelection,
     startDestination: String
 ) {
+    var userSelection by remember { mutableStateOf(UserSelection()) }
     val friendsViewModel: FriendsViewModel = viewModel()
     val eventsViewModel: EventsViewModel = viewModel()
 
     NavHost(
         navController = navController, 
         startDestination = startDestination,
-        modifier = Modifier.background(Color.Transparent) // Dodajemy przezroczyste tło
+        modifier = Modifier.background(Color.Transparent)
     ) {
 
         composable("terms_screen") {
@@ -73,10 +70,10 @@ fun AppNavigation(
                 if (userId != null) {
                     FirebaseService.getCurrentUserProfile { userProfile ->
                         if (userProfile != null) {
-                            userSelection.updateWith(userProfile)
+                            userSelection = userProfile
                             navController.navigate("fourth_stage") { popUpTo(0) { inclusive = true } }
                         } else {
-                            userSelection.userId = userId
+                            userSelection = userSelection.copy(userId = userId)
                             navController.navigate("login_info_screen") { popUpTo(0) { inclusive = true } }
                         }
                     }
@@ -92,7 +89,10 @@ fun AppNavigation(
         composable("login_info_screen") {
             LoginInfoScreen(
                 userSelection = userSelection,
-                onSaveSuccess = { navController.navigate("second_stage") },
+                onSaveSuccess = { 
+                    // Poprawka: Ta funkcja nie przyjmuje parametrów.
+                    navController.navigate("second_stage") 
+                },
             )
         }
 
@@ -102,7 +102,7 @@ fun AppNavigation(
                 initialUserSelection = userSelection,
                 onBackClick = { navController.popBackStack() },
                 onNextClick = { updatedUser ->
-                    userSelection.updateWith(updatedUser)
+                    userSelection = updatedUser
                     FirebaseService.updateFullProfile(userSelection, onSuccess = { 
                         navController.navigate("third_stage")
                     }, onError = { 
@@ -122,10 +122,7 @@ fun AppNavigation(
                 userCategory = userSelection.category,
                 onBackClick = { navController.popBackStack() },
                 onNextClick = { myAge, preferredAge, mySex, preferredSex ->
-                    userSelection.myAge = myAge
-                    userSelection.preferredAge = preferredAge
-                    userSelection.mySex = mySex
-                    userSelection.preferredSex = preferredSex
+                    userSelection = userSelection.copy(myAge = myAge, preferredAge = preferredAge, mySex = mySex, preferredSex = preferredSex)
                     FirebaseService.saveCurrentUser(userSelection, 
                         onSuccess = { navController.navigate("fourth_stage") },
                         onError = { /* Możesz tu pokazać błąd */ }
@@ -237,7 +234,7 @@ fun AppNavigation(
 
         composable("edit_preferences_screen") {
             EditPreferencesScreen(
-                userCategory = userSelection.category, 
+                userCategory = userSelection.category,
                 onBackClick = { navController.popBackStack() },
                 onSaveSuccess = { navController.navigate("profile_screen") { popUpTo("profile_screen") { inclusive = true } } }
             )
