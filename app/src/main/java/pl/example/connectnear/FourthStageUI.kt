@@ -3,6 +3,7 @@ package pl.example.connectnear
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -542,6 +543,7 @@ fun RadarPanel(
     var isRecurring by remember { mutableStateOf(false) }
     var recurringDetails by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("") }
+    var isCategoryMenuExpanded by remember { mutableStateOf(false) }
 
     val eventCategories = listOf("Sport", "Planszówki", "Kino/Teatr", "Spacer z psem", "Nauka/Warsztaty")
 
@@ -559,8 +561,8 @@ fun RadarPanel(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.3f)
-                    .padding(bottom = 120.dp)
+                    .fillMaxHeight(0.4f)
+                    .padding(bottom = 80.dp)
                     .padding(horizontal = 16.dp),
                 shape = RoundedCornerShape(24.dp),
                 elevation = CardDefaults.cardElevation(16.dp),
@@ -585,9 +587,11 @@ fun RadarPanel(
                     HorizontalDivider()
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                         items(usersNearby) { user ->
-                            val distance = calculateDistance(myLocation, LatLng(user.location!!.latitude, user.location!!.longitude))
-                            RadarUserItem(user, distance, onUserClick)
-                            HorizontalDivider()
+                            if (user.location != null) {
+                                val distance = calculateDistance(myLocation, LatLng(user.location.latitude, user.location.longitude))
+                                RadarUserItem(user, distance, onUserClick)
+                                HorizontalDivider()
+                            }
                         }
                         if (usersNearby.isEmpty()) {
                             item {
@@ -615,18 +619,30 @@ fun RadarPanel(
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(Modifier.height(8.dp))
-                    ExposedDropdownMenuBox(expanded = false, onExpandedChange = {}) {
+                    ExposedDropdownMenuBox(
+                        expanded = isCategoryMenuExpanded, 
+                        onExpandedChange = { isCategoryMenuExpanded = !isCategoryMenuExpanded }
+                    ) {
                         TextField(
                             value = selectedCategory,
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("Kategoria") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = false) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isCategoryMenuExpanded) },
                             modifier = Modifier.menuAnchor().fillMaxWidth()
                         )
-                        ExposedDropdownMenu(expanded = false, onDismissRequest = {}) {
+                        ExposedDropdownMenu(
+                            expanded = isCategoryMenuExpanded, 
+                            onDismissRequest = { isCategoryMenuExpanded = false }
+                        ) {
                             eventCategories.forEach { category ->
-                                DropdownMenuItem(text = { Text(category) }, onClick = { selectedCategory = category })
+                                DropdownMenuItem(
+                                    text = { Text(category) }, 
+                                    onClick = { 
+                                        selectedCategory = category 
+                                        isCategoryMenuExpanded = false
+                                    }
+                                )
                             }
                         }
                     }
