@@ -57,7 +57,6 @@ object ChatRepo {
         }
     }
 
-    // BEZPIECZNA WERSJA
     fun getMessages(chatId: String, onUpdate: (List<ChatMessage>) -> Unit) {
         db.collection("chats").document(chatId).collection("messages")
             .orderBy("timestamp", Query.Direction.ASCENDING)
@@ -136,7 +135,6 @@ object ChatRepo {
         }
     }
 
-    // --- TYPING STATUS ---
     fun setTypingStatus(chatId: String, userId: String, isTyping: Boolean) {
         val data = mapOf(
             "isTyping" to isTyping,
@@ -196,10 +194,9 @@ object ChatRepo {
                     if (dc.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
                         val data = dc.document.data
                         if (!(data["read"] as? Boolean ?: false)) {
+                            // KLUCZOWE: Oznaczamy jako przeczytane OD RAZU, żeby nie było pętli
+                            dc.document.reference.update("read", true)
                             onNewNotification(data)
-                            // OZNACZANIE JAKO PRZECZYTANE POWINNO SIĘ ODBYWAĆ W MIEJSCU OBSŁUGI POWIADOMIENIA,
-                            // A NIE AUTOMATYCZNIE TUTAJ.
-                            // dc.document.reference.update("read", true)
                         }
                     }
                 }

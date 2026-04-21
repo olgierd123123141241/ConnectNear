@@ -36,7 +36,7 @@ import pl.example.connectnear.ui.theme.getCategoryGradient
 fun UserProfileScreen(
     targetUserId: String,
     onBackClick: () -> Unit,
-    onChatClick: (String, String, String) -> Unit // Dodano trzeci parametr na startową wiadomość
+    onChatClick: (String, String, String) -> Unit 
 ) {
     val context = LocalContext.current
     val myUserId = FirebaseService.auth.currentUser?.uid ?: ""
@@ -48,7 +48,6 @@ fun UserProfileScreen(
     var showBlockDialog by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     
-    // Lodołamacz (Icebreaker)
     var showIcebreakerDialog by remember { mutableStateOf(false) }
     var commonInterests by remember { mutableStateOf<List<String>>(emptyList()) }
     
@@ -97,7 +96,7 @@ fun UserProfileScreen(
     }
 
     val backgroundBrush = if (userData != null) {
-        getCategoryGradient(userData!!.category)
+        getCategoryGradient(userData!!.category ?: "")
     } else {
         Brush.verticalGradient(colors = listOf(Color(0xFF0AA4F4), Color(0xFF1CD9C3)))
     }
@@ -151,7 +150,7 @@ fun UserProfileScreen(
                     .border(3.dp, Color.White, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                if (user.profileImageUrl.isNotEmpty()) {
+                if (!user.profileImageUrl.isNullOrEmpty()) {
                     AsyncImage(
                         model = user.profileImageUrl,
                         contentDescription = null,
@@ -165,15 +164,14 @@ fun UserProfileScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Zmiana: Status obok nazwy użytkownika
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
             ) {
-                Text(user.name, fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text(user.name ?: "Brak nazwy", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 
-                if (user.userStatus.isNotEmpty()) {
+                if (!user.userStatus.isNullOrEmpty()) {
                     val statusConfig = when (user.userStatus) {
                         "available" -> Triple("🟢 Wolny (Czas)", Color(0xFF4CAF50), Color.White)
                         "relationship" -> Triple("❤️ Wolny (Związek)", Color(0xFF4CAF50), Color.White)
@@ -197,18 +195,18 @@ fun UserProfileScreen(
                 }
             }
             
-            if(user.personalityType.isNotEmpty() && user.personalityType != "Nie chcę podawać") {
+            if(!user.personalityType.isNullOrEmpty() && user.personalityType != "Nie chcę podawać") {
                 Text("(${user.personalityType})", fontSize = 16.sp, color = Color.White.copy(0.8f))
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(user.category, fontSize = 18.sp, color = Color.White.copy(0.9f), fontWeight = FontWeight.SemiBold)
+                    Text(user.category ?: "", fontSize = 18.sp, color = Color.White.copy(0.9f), fontWeight = FontWeight.SemiBold)
                     
                     val subCategoryText = when (user.category) {
-                        "Sport" -> user.subCategory
-                        "Impreza" -> user.partyType
+                        "Sport" -> user.subCategory ?: ""
+                        "Impreza" -> user.partyType ?: ""
                         else -> ""
                     }
                     if (subCategoryText.isNotEmpty()) {
@@ -234,12 +232,11 @@ fun UserProfileScreen(
             if (currentUserData != null) {
                 val me = currentUserData!!
                 
-                val myInterestsSet = me.interests.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
-                val userInterestsSet = user.interests.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
+                val myInterestsSet = (me.interests ?: "").split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
+                val userInterestsSet = (user.interests ?: "").split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
                 val commonInterestsList = myInterestsSet.intersect(userInterestsSet).toList()
 
-                // Obliczanie zgodności...
-                val samePersonality = user.personalityType.isNotBlank() && user.personalityType != "Nie chcę podawać" && user.personalityType == me.personalityType
+                val samePersonality = !user.personalityType.isNullOrBlank() && user.personalityType != "Nie chcę podawać" && user.personalityType == me.personalityType
                 var compatibilityScore = (commonInterestsList.size * 10).coerceAtMost(50)
                 if (samePersonality) compatibilityScore += 20
                 if (me.category == user.category) compatibilityScore += 10
@@ -254,14 +251,13 @@ fun UserProfileScreen(
                     }
                 }
                 
-                 // Dialog Lodołamacza
                 if (showIcebreakerDialog) {
                     IcebreakerDialog(
                         commonInterests = commonInterestsList,
                         onDismiss = { showIcebreakerDialog = false },
                         onSend = { message ->
                             showIcebreakerDialog = false
-                            onChatClick(user.userId, user.name, message)
+                            onChatClick(user.userId, user.name ?: "Użytkownik", message)
                         }
                     )
                 }
@@ -273,46 +269,46 @@ fun UserProfileScreen(
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text("O mnie", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(text = if (user.description.isNotEmpty()) user.description else "Brak opisu.", color = Color.White.copy(0.9f), fontSize = 14.sp, lineHeight = 20.sp)
+                    Text(text = if (!user.description.isNullOrEmpty()) user.description!! else "Brak opisu.", color = Color.White.copy(0.9f), fontSize = 14.sp, lineHeight = 20.sp)
 
-                    if (user.smoking.isNotEmpty() || user.drinking.isNotEmpty()) {
+                    if (!user.smoking.isNullOrEmpty() || !user.drinking.isNullOrEmpty()) {
                         Spacer(modifier = Modifier.height(16.dp))
                         Text("Styl Życia / Używki", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            if (user.smoking.isNotEmpty()) {
+                            if (!user.smoking.isNullOrEmpty()) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("🚬 Palenie: ", color = Color.White.copy(0.7f), fontSize = 14.sp)
-                                    Text(user.smoking, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text(user.smoking!!, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                 }
                             }
-                            if (user.drinking.isNotEmpty()) {
+                            if (!user.drinking.isNullOrEmpty()) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("🍺 Alkohol: ", color = Color.White.copy(0.7f), fontSize = 14.sp)
-                                    Text(user.drinking, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text(user.drinking!!, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                 }
                             }
                         }
                     }
                     
-                    if (user.isPersonalTrainer && user.trainerDescription.isNotEmpty()) {
+                    if (user.isPersonalTrainer && !user.trainerDescription.isNullOrEmpty()) {
                         Spacer(modifier = Modifier.height(16.dp))
                         Text("Oferta trenerska:", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.Yellow)
-                        Text(user.trainerDescription, color = Color.White.copy(0.9f), fontSize = 14.sp)
+                        Text(user.trainerDescription!!, color = Color.White.copy(0.9f), fontSize = 14.sp)
                     }
                     
-                    if (user.isTutor && user.tutorDescription.isNotEmpty()) {
+                    if (user.isTutor && !user.tutorDescription.isNullOrEmpty()) {
                         Spacer(modifier = Modifier.height(16.dp))
                         Text("Oferta korepetycji:", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.Yellow)
-                        Text(user.tutorDescription, color = Color.White.copy(0.9f), fontSize = 14.sp)
+                        Text(user.tutorDescription!!, color = Color.White.copy(0.9f), fontSize = 14.sp)
                     }
                     
-                    if (user.interests.isNotEmpty()) {
+                    if (!user.interests.isNullOrEmpty()) {
                         Spacer(modifier = Modifier.height(16.dp))
                         Text("Zainteresowania", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         Spacer(modifier = Modifier.height(8.dp))
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            user.interests.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tag ->
+                            user.interests!!.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { tag ->
                                 Surface(color = Color.White.copy(0.2f), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Color.White.copy(0.5f))) {
                                     Text(text = tag, color = Color.White, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp), fontSize = 12.sp)
                                 }
@@ -338,28 +334,28 @@ fun UserProfileScreen(
                 if (isSocialsExpanded) {
                     Spacer(modifier = Modifier.height(16.dp))
                     FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        if (user.instagramLink.isNotEmpty()) {
-                            SocialIcon(Icons.Default.PhotoCamera, Color(0xFFE1306C)) { openSocialMedia(user.instagramLink, "instagram") }
+                        if (!user.instagramLink.isNullOrEmpty()) {
+                            SocialIcon(Icons.Default.PhotoCamera, Color(0xFFE1306C)) { openSocialMedia(user.instagramLink!!, "instagram") }
                             Spacer(modifier = Modifier.width(16.dp))
                         }
-                        if (user.facebookLink.isNotEmpty()) {
-                            SocialIcon(Icons.Default.Public, Color(0xFF1877F2)) { openSocialMedia(user.facebookLink, "facebook") }
+                        if (!user.facebookLink.isNullOrEmpty()) {
+                            SocialIcon(Icons.Default.Public, Color(0xFF1877F2)) { openSocialMedia(user.facebookLink!!, "facebook") }
                             Spacer(modifier = Modifier.width(16.dp))
                         }
-                        if (user.tiktokLink.isNotEmpty()) {
-                            SocialIcon(Icons.Default.MusicNote, Color.Black) { openSocialMedia(user.tiktokLink, "tiktok") }
+                        if (!user.tiktokLink.isNullOrEmpty()) {
+                            SocialIcon(Icons.Default.MusicNote, Color.Black) { openSocialMedia(user.tiktokLink!!, "tiktok") }
                             Spacer(modifier = Modifier.width(16.dp))
                         }
-                        if (user.messengerLink.isNotEmpty()) {
-                            SocialIcon(Icons.Default.ChatBubble, Color(0xFF0084FF)) { openSocialMedia(user.messengerLink, "messenger") }
+                        if (!user.messengerLink.isNullOrEmpty()) {
+                            SocialIcon(Icons.Default.ChatBubble, Color(0xFF0084FF)) { openSocialMedia(user.messengerLink!!, "messenger") }
                             Spacer(modifier = Modifier.width(16.dp))
                         }
-                        if (user.spotifyLink.isNotEmpty()) {
-                            SocialIcon(Icons.Default.Audiotrack, Color(0xFF1DB954)) { openSocialMedia(user.spotifyLink, "spotify") }
+                        if (!user.spotifyLink.isNullOrEmpty()) {
+                            SocialIcon(Icons.Default.Audiotrack, Color(0xFF1DB954)) { openSocialMedia(user.spotifyLink!!, "spotify") }
                             Spacer(modifier = Modifier.width(16.dp))
                         }
-                        if (user.steamLink.isNotEmpty()) {
-                            SocialIcon(Icons.Default.Gamepad, Color(0xFF171A21)) { openSocialMedia(user.steamLink, "steam") }
+                        if (!user.steamLink.isNullOrEmpty()) {
+                            SocialIcon(Icons.Default.Gamepad, Color(0xFF171A21)) { openSocialMedia(user.steamLink!!, "steam") }
                         }
                     }
                 }
@@ -368,18 +364,19 @@ fun UserProfileScreen(
                 Button(
                     onClick = { 
                         if(currentUserData != null) {
-                            val myInterests = currentUserData!!.interests.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
-                            val userInterests = user.interests.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
+                            val me = currentUserData!!
+                            val myInterests = (me.interests ?: "").split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
+                            val userInterests = (user.interests ?: "").split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
                             val common = myInterests.intersect(userInterests).toList()
 
                             if (common.isNotEmpty()) {
                                 commonInterests = common
                                 showIcebreakerDialog = true
                             } else {
-                                onChatClick(user.userId, user.name, "")
+                                onChatClick(user.userId, user.name ?: "Użytkownik", "")
                             }
                         } else {
-                            onChatClick(user.userId, user.name, "")
+                            onChatClick(user.userId, user.name ?: "Użytkownik", "")
                         }
                     },
                     modifier = Modifier.fillMaxWidth().height(50.dp),
@@ -405,7 +402,7 @@ fun UserProfileScreen(
                             Spacer(modifier = Modifier.height(24.dp))
                             Button(
                                 onClick = {
-                                    FirebaseService.sendFriendRequest(myUserId = myUserId, myName = "Ja", targetUserId = user.userId,
+                                    FirebaseService.sendFriendRequest(myUserId = myUserId, myName = currentUserData?.name ?: "Ktoś", targetUserId = user.userId,
                                         onSuccess = { Toast.makeText(context, "Wysłano zaproszenie!", Toast.LENGTH_SHORT).show() },
                                         onError = { Toast.makeText(context, "Błąd: $it", Toast.LENGTH_SHORT).show() }
                                     )

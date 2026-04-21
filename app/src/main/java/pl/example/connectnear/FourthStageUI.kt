@@ -131,54 +131,57 @@ fun FourthStageMap(
     onPermissionRequest: () -> Unit,
     selectedUser: FoundUser? = null
 ) {
-    if (myLocation != null) {
-        val cameraPositionState = rememberCameraPositionState {
-            position = CameraPosition.fromLatLngZoom(myLocation, 14f)
-        }
-
-        val myMarkerColor = getCategoryPrimaryColor(userCategory)
-
-        GoogleMap(
-            modifier = Modifier.fillMaxSize(),
-            cameraPositionState = cameraPositionState,
-            properties = MapProperties(isMyLocationEnabled = true),
-            onMapClick = { onMapClick() },
-            onMapLongClick = { onMapLongClick(it) }
-        ) {
-            // --- ZNACZNIK UŻYTKOWNIKA (JA) ---
-            MyMarker(
-                location = myLocation,
-                profileImageUrl = myProfileImageUrl,
-                borderColor = myMarkerColor
-            )
-
-            // --- ZNACZNIKI INNYCH UŻYTKOWNIKÓW ---
-            otherUsers.forEach { user ->
-                MapUserMarker(
-                    user = user,
-                    isSelected = selectedUser?.userId == user.userId,
-                    onClick = onUserMarkerClick
-                )
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (myLocation != null) {
+            val cameraPositionState = rememberCameraPositionState {
+                position = CameraPosition.fromLatLngZoom(myLocation, 14f)
             }
 
-            // --- ZNACZNIKI FLASH EVENTS (ZDJĘCIA) ---
-            flashEvents.forEach { event ->
-                FlashEventMarker(
-                    event = event,
-                    onClick = onFlashEventClick
+            val myMarkerColor = getCategoryPrimaryColor(userCategory)
+
+            GoogleMap(
+                modifier = Modifier.fillMaxSize(),
+                cameraPositionState = cameraPositionState,
+                properties = MapProperties(isMyLocationEnabled = true),
+                uiSettings = MapUiSettings(zoomControlsEnabled = false),
+                onMapClick = { onMapClick() },
+                onMapLongClick = { onMapLongClick(it) }
+            ) {
+                // --- ZNACZNIK UŻYTKOWNIKA (JA) ---
+                MyMarker(
+                    location = myLocation,
+                    profileImageUrl = myProfileImageUrl,
+                    borderColor = myMarkerColor
                 )
-            }
-        }
-    } else {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            if (!hasPermission) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Brak uprawnień GPS", color = Color.Red)
-                    Button(onClick = onPermissionRequest) { Text("Nadaj uprawnienia") }
+
+                // --- ZNACZNIKI INNYCH UŻYTKOWNIKÓW ---
+                otherUsers.forEach { user ->
+                    MapUserMarker(
+                        user = user,
+                        isSelected = selectedUser?.userId == user.userId,
+                        onClick = onUserMarkerClick
+                    )
                 }
-            } else {
-                CircularProgressIndicator()
-                Text("Szukam GPS...", modifier = Modifier.padding(top = 40.dp))
+
+                // --- ZNACZNIKI FLASH EVENTS (ZDJĘCIA) ---
+                flashEvents.forEach { event ->
+                    FlashEventMarker(
+                        event = event,
+                        onClick = onFlashEventClick
+                    )
+                }
+            }
+        } else {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                if (!hasPermission) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Brak uprawnień GPS", color = Color.Red)
+                        Button(onClick = onPermissionRequest) { Text("Nadaj uprawnienia") }
+                    }
+                } else {
+                    CircularProgressIndicator()
+                    Text("Szukam GPS...", modifier = Modifier.padding(top = 40.dp))
+                }
             }
         }
     }
