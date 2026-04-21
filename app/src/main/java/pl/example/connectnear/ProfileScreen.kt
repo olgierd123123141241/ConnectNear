@@ -57,6 +57,7 @@ fun ProfileScreen(
     var smoking by remember { mutableStateOf("") }
     var drinking by remember { mutableStateOf("") }
     var personalityType by remember { mutableStateOf("") }
+    var isProfilePublic by remember { mutableStateOf(true) } // Nowy stan
 
     var selectedTab by remember { mutableStateOf(0) }
     var showPasswordDialog by remember { mutableStateOf(false) }
@@ -67,6 +68,7 @@ fun ProfileScreen(
             userSelection = data; name = data.name; description = data.description
             profileImageUrl = data.profileImageUrl; interests = if (data.interests.isNullOrEmpty()) emptyList() else data.interests.split(",").map { it.trim() }
             userStatus = data.userStatus; smoking = data.smoking; drinking = data.drinking; personalityType = data.personalityType
+            isProfilePublic = data.isProfilePublic // Wczytujemy nowy stan
         }
         isLoading = false
     }
@@ -194,6 +196,24 @@ fun ProfileScreen(
 
                 AnimatedVisibility(visible = selectedTab == 1) {
                     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // --- NOWY PRZEŁĄCZNIK PRYWATNOŚCI ---
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 16.dp)) {
+                            Text("Profil publiczny", color = Color.White, fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.weight(1f))
+                            Switch(checked = isProfilePublic, onCheckedChange = { 
+                                isProfilePublic = it 
+                                // Od razu zapisujemy zmianę w tle
+                                scope.launch {
+                                    val updatedUser = userSelection?.copy(isProfilePublic = it)
+                                    if (updatedUser != null) {
+                                        FirebaseService.updateFullProfile(updatedUser, onSuccess = {}, onError = {})
+                                    }
+                                }
+                            })
+                        }
+                        Text("Gdy profil jest prywatny, tylko Twoi znajomi widzą Twoje zdjęcia i sociale.", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 16.dp))
+                        Divider(modifier = Modifier.padding(vertical = 8.dp))
+
                         Button(onClick = onFriendsClick) { Text("Znajomi i sugestie") }
                         Button(onClick = onChatsClick) { Text("Czaty") }
                         Button(onClick = onGroupsClick) { Text("Grupy") }

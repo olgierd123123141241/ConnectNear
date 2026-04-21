@@ -186,22 +186,20 @@ object ChatRepo {
 
     fun listenForNotifications(myUserId: String, onNewNotification: (Map<String, Any>) -> Unit): ListenerRegistration {
         return db.collection("users").document(myUserId).collection("notifications")
-            .whereEqualTo("read", false)
             .addSnapshotListener { snapshots, e ->
-                if (e != null) return@addSnapshotListener
-                if (snapshots != null) {
-                    for (dc in snapshots.documentChanges) {
-                        if (dc.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
-                            val data = dc.document.data.toMutableMap()
-                            data["id"] = dc.document.id
+                if (e != null) {
+                    Log.w("ChatRepo", "Listen failed.", e)
+                    return@addSnapshotListener
+                }
+
+                for (dc in snapshots!!.documentChanges) {
+                    if (dc.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
+                        val data = dc.document.data
+                        if (!(data["read"] as? Boolean ?: false)) {
                             onNewNotification(data)
-                            
-                            db.collection("users").document(myUserId).collection("notifications")
-                                .document(dc.document.id)
-                                .update("read", true)
-                                .addOnFailureListener { 
-                                    // Ignorujemy błąd
-                                }
+                            // OZNACZANIE JAKO PRZECZYTANE POWINNO SIĘ ODBYWAĆ W MIEJSCU OBSŁUGI POWIADOMIENIA,
+                            // A NIE AUTOMATYCZNIE TUTAJ.
+                            // dc.document.reference.update("read", true)
                         }
                     }
                 }

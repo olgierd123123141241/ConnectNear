@@ -87,8 +87,11 @@ object FirebaseService {
         }
     }
 
-    fun acceptFriendRequest(myUserId: String, senderId: String, senderName: String, onSuccess: () -> Unit) =
-        FriendsRepo.acceptFriendRequest(myUserId, senderId, senderName, onSuccess)
+    fun acceptFriendRequest(myUserId: String, senderId: String, senderName: String, onSuccess: () -> Unit, onError: (String) -> Unit) =
+        FriendsRepo.acceptFriendRequest(myUserId, senderId, senderName, onSuccess, onError)
+
+    fun rejectFriendRequest(myUserId: String, senderId: String, onSuccess: () -> Unit, onError: (String) -> Unit) =
+        FriendsRepo.rejectFriendRequest(myUserId, senderId, onSuccess, onError)
 
     fun getFriends(myUserId: String, onSuccess: (List<FoundUser>) -> Unit) =
         FriendsRepo.getFriends(myUserId, onSuccess)

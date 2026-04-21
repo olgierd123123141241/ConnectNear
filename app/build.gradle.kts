@@ -9,7 +9,7 @@ val localProperties: java.util.Properties by project.extra
 
 android {
     namespace = "pl.example.connectnear"
-    compileSdk = 35 // FIXED: Was 36, which is incompatible with the project's Android Gradle Plugin version.
+    compileSdk = 35 
 
     defaultConfig {
         applicationId = "pl.example.connectnear"
@@ -45,7 +45,6 @@ android {
         kotlinCompilerExtensionVersion = libs.versions.compose.compiler.get()
     }
     buildToolsVersion = "35.0.0"
-    ndkVersion = "29.0.14206865"
 }
 
 dependencies {
@@ -61,7 +60,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation("androidx.compose.material:material-icons-extended") // Usunięto wersję, będzie z BOM
+    implementation(libs.androidx.material.icons.extended)
 
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.datastore.preferences)
