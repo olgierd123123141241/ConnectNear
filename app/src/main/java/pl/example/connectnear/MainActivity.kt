@@ -37,8 +37,26 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             ConnectNearTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
-                    val navController = rememberNavController()
+                val navController = rememberNavController()
+                val navBackStackEntry by navController.currentBackStackEntryAsState()
+                val currentRoute = navBackStackEntry?.destination?.route
+                
+                // Trzymamy kolor tła w stanie, aby zmieniać go dynamicznie
+                var backgroundColor by remember { mutableStateOf(Color.Transparent) }
+                
+                // Aktualizacja koloru tła w zależności od ekranu
+                LaunchedEffect(currentRoute) {
+                    backgroundColor = when (currentRoute) {
+                        "auth_screen" -> Color(0xFFC67CFF)
+                        "first_stage" -> Color(0xFFC67CFF) // Lub inny kolor startowy
+                        else -> Color.Transparent
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.fillMaxSize(), 
+                    color = backgroundColor // To wypełni cały ekran, pod paskami systemowymi
+                ) {
                     val context = LocalContext.current
 
                     val locationPermissionRequest = rememberLauncherForActivityResult(
@@ -59,9 +77,6 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val startDestination = "first_stage"
-                    
-                    val navBackStackEntry by navController.currentBackStackEntryAsState()
-                    val currentRoute = navBackStackEntry?.destination?.route
                     val bottomBarVisibleRoutes = listOf("fourth_stage", "friends_list_screen", "groups_screen", "ai_screen", "profile_screen", "events_screen")
 
                     Scaffold(
@@ -72,8 +87,14 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     ) { paddingValues ->
-                        Box(modifier = Modifier.padding(paddingValues)) {
-                            // POPRAWKA: Usunięto parametr userSelection
+                        // Box bez paddingu systemowego na ekranach pełnoekranowych
+                        val modifier = if (currentRoute == "fourth_stage" || currentRoute == "auth_screen") {
+                            Modifier.fillMaxSize()
+                        } else {
+                            Modifier.padding(paddingValues)
+                        }
+
+                        Box(modifier = modifier) {
                             AppNavigation(
                                 navController = navController,
                                 startDestination = startDestination

@@ -3,6 +3,7 @@ package pl.example.connectnear
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -12,7 +13,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -42,7 +45,7 @@ fun EditProfileScreen(
         debounceJob?.cancel()
         debounceJob = scope.launch {
             saveState = "Zapisywanie..."
-            delay(1500)
+            delay(1000)
             user?.let {
                 val updatedUser = it.copy(
                     instagramLink = instagramLink,
@@ -55,7 +58,6 @@ fun EditProfileScreen(
                 FirebaseService.updateFullProfile(updatedUser,
                     onSuccess = { 
                         saveState = "Zapisano"
-                        onSaveSuccess()
                     },
                     onError = { saveState = "Błąd zapisu" }
                 )
@@ -80,104 +82,166 @@ fun EditProfileScreen(
         if (!isLoading) triggerSave()
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Edytuj Social Media") },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Wróć")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-        },
-        containerColor = Color.Transparent
-    ) {
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize().background(getCategoryGradient(user?.category ?: "")), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(getCategoryGradient(user?.category ?: ""))
-                    .padding(it)
-                    .padding(16.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                Text("Połącz swoje konta", style = MaterialTheme.typography.headlineSmall, color = Color.White)
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Wpisz swoje nazwy użytkownika, aby inni mogli Cię znaleźć.", style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.8f))
-                Spacer(modifier = Modifier.height(24.dp))
-
-                OutlinedTextField(
-                    value = instagramLink,
-                    onValueChange = { instagramLink = it },
-                    label = { Text("Nazwa użytkownika Instagram") },
-                    modifier = Modifier.fillMaxWidth(),
-                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) }
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-
-                OutlinedTextField(
-                    value = facebookLink,
-                    onValueChange = { facebookLink = it },
-                    label = { Text("Nazwa użytkownika Facebook") },
-                    modifier = Modifier.fillMaxWidth(),
-                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) }
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-
-                OutlinedTextField(
-                    value = tiktokLink,
-                    onValueChange = { tiktokLink = it },
-                    label = { Text("Nazwa użytkownika TikTok") },
-                    modifier = Modifier.fillMaxWidth(),
-                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) }
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-
-                OutlinedTextField(
-                    value = youtubeLink,
-                    onValueChange = { youtubeLink = it },
-                    label = { Text("Nazwa użytkownika YouTube") },
-                    modifier = Modifier.fillMaxWidth(),
-                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) }
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-
-                OutlinedTextField(
-                    value = twitterLink,
-                    onValueChange = { twitterLink = it },
-                    label = { Text("Nazwa użytkownika Twitter") },
-                    modifier = Modifier.fillMaxWidth(),
-                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) }
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-
-                OutlinedTextField(
-                    value = snapchatLink,
-                    onValueChange = { snapchatLink = it },
-                    label = { Text("Nazwa użytkownika Snapchat") },
-                    modifier = Modifier.fillMaxWidth(),
-                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) }
-                )
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = saveState,
-                        color = when (saveState) {
-                            "Zapisano" -> Color.Green
-                            "Zapisywanie..." -> Color.Yellow
-                            else -> Color.Red
+    Box(modifier = Modifier.fillMaxSize().background(getCategoryGradient(user?.category ?: ""))) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Edytuj Social Media", color = Color.White) },
+                    navigationIcon = {
+                        IconButton(onClick = onBackClick) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Wróć", tint = Color.White)
                         }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
+                )
+            },
+            containerColor = Color.Transparent
+        ) { padding ->
+            if (isLoading) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Color.White)
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text("Połącz swoje konta", style = MaterialTheme.typography.headlineSmall, color = Color.White)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Wpisz swoje nazwy użytkownika. Zapisują się automatycznie.", style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.8f))
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    OutlinedTextField(
+                        value = instagramLink,
+                        onValueChange = { instagramLink = it },
+                        label = { Text("Instagram") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color.White,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.5f),
+                            focusedLabelColor = Color.White,
+                            unfocusedLabelColor = Color.White.copy(alpha = 0.7f)
+                        ),
+                        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = Color.White) }
                     )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    OutlinedTextField(
+                        value = facebookLink,
+                        onValueChange = { facebookLink = it },
+                        label = { Text("Facebook") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color.White,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.5f),
+                            focusedLabelColor = Color.White,
+                            unfocusedLabelColor = Color.White.copy(alpha = 0.7f)
+                        ),
+                        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = Color.White) }
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    OutlinedTextField(
+                        value = tiktokLink,
+                        onValueChange = { tiktokLink = it },
+                        label = { Text("TikTok") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color.White,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.5f),
+                            focusedLabelColor = Color.White,
+                            unfocusedLabelColor = Color.White.copy(alpha = 0.7f)
+                        ),
+                        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = Color.White) }
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    OutlinedTextField(
+                        value = youtubeLink,
+                        onValueChange = { youtubeLink = it },
+                        label = { Text("YouTube") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color.White,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.5f),
+                            focusedLabelColor = Color.White,
+                            unfocusedLabelColor = Color.White.copy(alpha = 0.7f)
+                        ),
+                        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = Color.White) }
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    OutlinedTextField(
+                        value = twitterLink,
+                        onValueChange = { twitterLink = it },
+                        label = { Text("Twitter / X") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color.White,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.5f),
+                            focusedLabelColor = Color.White,
+                            unfocusedLabelColor = Color.White.copy(alpha = 0.7f)
+                        ),
+                        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = Color.White) }
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    OutlinedTextField(
+                        value = snapchatLink,
+                        onValueChange = { snapchatLink = it },
+                        label = { Text("Snapchat") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color.White,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.5f),
+                            focusedLabelColor = Color.White,
+                            unfocusedLabelColor = Color.White.copy(alpha = 0.7f)
+                        ),
+                        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = Color.White) }
+                    )
+
+                    Spacer(modifier = Modifier.height(32.dp))
+
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Surface(
+                            color = getSaveStateColor(saveState),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text(
+                                text = saveState,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(50.dp))
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun getSaveStateColor(state: String): Color {
+    return when (state) {
+        "Zapisano" -> Color(0xFF4CAF50).copy(alpha = 0.8f)
+        "Zapisywanie..." -> Color(0xFFFFC107).copy(alpha = 0.8f)
+        else -> Color(0xFFF44336).copy(alpha = 0.8f)
     }
 }

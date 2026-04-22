@@ -90,6 +90,7 @@ fun AppNavigation(
             LoginInfoScreen(
                 userSelection = userSelection,
                 onSaveSuccess = { 
+                    // Poprawka: Ta funkcja nie przyjmuje parametrów.
                     navController.navigate("second_stage") 
                 },
             )
@@ -105,6 +106,7 @@ fun AppNavigation(
                     FirebaseService.updateFullProfile(userSelection, onSuccess = { 
                         navController.navigate("third_stage")
                     }, onError = { 
+                        // Show error message, do not navigate
                     })
                 }
             )
@@ -123,7 +125,7 @@ fun AppNavigation(
                     userSelection = userSelection.copy(myAge = myAge, preferredAge = preferredAge, mySex = mySex, preferredSex = preferredSex)
                     FirebaseService.saveCurrentUser(userSelection, 
                         onSuccess = { navController.navigate("fourth_stage") },
-                        onError = { }
+                        onError = { /* Możesz tu pokazać błąd */ }
                     )
                 }
             )
@@ -134,9 +136,8 @@ fun AppNavigation(
                 userSelection = userSelection,
                 onBackClick = { navController.popBackStack() },
                 onChatClick = { id, name, message -> 
-                    val encodedName = URLEncoder.encode(name, StandardCharsets.UTF_8.toString())
                     val encodedMessage = URLEncoder.encode(message, StandardCharsets.UTF_8.toString())
-                    navController.navigate("chat_screen/$id/$encodedName?isGroup=false&initialMessage=$encodedMessage") 
+                    navController.navigate("chat_screen/$id/$name?isGroup=false&initialMessage=$encodedMessage") 
                 },
                 onProfileClick = { navController.navigate("profile_screen") },
                 onOtherUserProfileClick = { id -> navController.navigate("user_profile_screen/$id") }
@@ -148,9 +149,8 @@ fun AppNavigation(
                 userSelection = userSelection, 
                 onBackClick = { navController.popBackStack() }, 
                 onChatClick = { id, name, message -> 
-                    val encodedName = URLEncoder.encode(name, StandardCharsets.UTF_8.toString())
                     val encodedMessage = URLEncoder.encode(message, StandardCharsets.UTF_8.toString())
-                    navController.navigate("chat_screen/$id/$encodedName?isGroup=false&initialMessage=$encodedMessage") 
+                    navController.navigate("chat_screen/$id/$name?isGroup=false&initialMessage=$encodedMessage") 
                 }
             )
         }
@@ -172,14 +172,8 @@ fun AppNavigation(
                 myUserId = userSelection.userId,
                 userCategory = userSelection.category,
                 onBackClick = { navController.popBackStack() },
-                onGroupClick = { id, name -> 
-                    val encodedName = URLEncoder.encode(name, StandardCharsets.UTF_8.toString())
-                    navController.navigate("chat_screen/$id/$encodedName?isGroup=true") 
-                },
-                onPrivateChatClick = { id, name -> 
-                    val encodedName = URLEncoder.encode(name, StandardCharsets.UTF_8.toString())
-                    navController.navigate("chat_screen/$id/$encodedName?isGroup=false") 
-                }
+                onGroupClick = { id, name -> navController.navigate("chat_screen/$id/$name?isGroup=true") },
+                onPrivateChatClick = { id, name -> navController.navigate("chat_screen/$id/$name?isGroup=false") }
             )
         }
 
@@ -189,9 +183,8 @@ fun AppNavigation(
                 targetUserId = targetUserId, 
                 onBackClick = { navController.popBackStack() }, 
                 onChatClick = { id, name, message ->
-                    val encodedName = URLEncoder.encode(name, StandardCharsets.UTF_8.toString())
                     val encodedMessage = URLEncoder.encode(message, StandardCharsets.UTF_8.toString())
-                    navController.navigate("chat_screen/$id/$encodedName?isGroup=false&initialMessage=$encodedMessage")
+                    navController.navigate("chat_screen/$id/$name?isGroup=false&initialMessage=$encodedMessage")
                 }
             )
         }

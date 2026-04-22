@@ -271,3 +271,18 @@ fun FourthStage(
         }
     }
 }
+
+@Composable
+fun FourthStageControls(
+    selectedUser: FoundUser?,
+    isFriend: Boolean,
+    onChatClick: () -> Unit?,
+    onSendRequestClick: () -> Unit?,
+    onOtherProfileClick: () -> Unit?,
+    onCloseUserClick: () -> Unit,
+    onExitClick: () -> Unit,
+    onMyProfileClick: () -> Unit,
+    onRadarClick: () -> Unit
+) {
+    TODO("Not yet implemented")
+}

@@ -14,8 +14,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.*
@@ -60,7 +62,7 @@ fun FourthStageUI(
         FourthStageMap(
             myLocation = uiState.myLocation,
             myProfileImageUrl = userSelection.profileImageUrl,
-            userCategory = userSelection.category, // Można by też trzymać w uiState
+            userCategory = userSelection.category,
             otherUsers = uiState.otherUsers,
             flashEvents = uiState.flashEvents,
             onMapClick = { onUserDeselected() },
@@ -73,7 +75,7 @@ fun FourthStageUI(
             },
             onMapLongClick = {},
             hasPermission = uiState.hasPermission,
-            onPermissionRequest = { /* Logika uprawnień w ViewModel */ },
+            onPermissionRequest = { /* Logika w ViewModel */ },
             selectedUser = uiState.selectedUser
         )
 
@@ -131,57 +133,52 @@ fun FourthStageMap(
     onPermissionRequest: () -> Unit,
     selectedUser: FoundUser? = null
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        if (myLocation != null) {
-            val cameraPositionState = rememberCameraPositionState {
-                position = CameraPosition.fromLatLngZoom(myLocation, 14f)
-            }
+    if (myLocation != null) {
+        val cameraPositionState = rememberCameraPositionState {
+            position = CameraPosition.fromLatLngZoom(myLocation, 14f)
+        }
 
-            val myMarkerColor = getCategoryPrimaryColor(userCategory)
+        val myMarkerColor = getCategoryPrimaryColor(userCategory)
 
-            GoogleMap(
-                modifier = Modifier.fillMaxSize(),
-                cameraPositionState = cameraPositionState,
-                properties = MapProperties(isMyLocationEnabled = true),
-                uiSettings = MapUiSettings(zoomControlsEnabled = false),
-                onMapClick = { onMapClick() },
-                onMapLongClick = { onMapLongClick(it) }
-            ) {
-                // --- ZNACZNIK UŻYTKOWNIKA (JA) ---
-                MyMarker(
-                    location = myLocation,
-                    profileImageUrl = myProfileImageUrl,
-                    borderColor = myMarkerColor
+        GoogleMap(
+            modifier = Modifier.fillMaxSize(),
+            cameraPositionState = cameraPositionState,
+            properties = MapProperties(isMyLocationEnabled = true),
+            uiSettings = MapUiSettings(zoomControlsEnabled = false, myLocationButtonEnabled = false),
+            onMapClick = { onMapClick() },
+            onMapLongClick = { onMapLongClick(it) }
+        ) {
+            MyMarker(
+                location = myLocation,
+                profileImageUrl = myProfileImageUrl,
+                borderColor = myMarkerColor
+            )
+
+            otherUsers.forEach { user ->
+                MapUserMarker(
+                    user = user,
+                    isSelected = selectedUser?.userId == user.userId,
+                    onClick = onUserMarkerClick
                 )
-
-                // --- ZNACZNIKI INNYCH UŻYTKOWNIKÓW ---
-                otherUsers.forEach { user ->
-                    MapUserMarker(
-                        user = user,
-                        isSelected = selectedUser?.userId == user.userId,
-                        onClick = onUserMarkerClick
-                    )
-                }
-
-                // --- ZNACZNIKI FLASH EVENTS (ZDJĘCIA) ---
-                flashEvents.forEach { event ->
-                    FlashEventMarker(
-                        event = event,
-                        onClick = onFlashEventClick
-                    )
-                }
             }
-        } else {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (!hasPermission) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Brak uprawnień GPS", color = Color.Red)
-                        Button(onClick = onPermissionRequest) { Text("Nadaj uprawnienia") }
-                    }
-                } else {
-                    CircularProgressIndicator()
-                    Text("Szukam GPS...", modifier = Modifier.padding(top = 40.dp))
+
+            flashEvents.forEach { event ->
+                FlashEventMarker(
+                    event = event,
+                    onClick = onFlashEventClick
+                )
+            }
+        }
+    } else {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (!hasPermission) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Brak uprawnień GPS", color = Color.Red)
+                    Button(onClick = onPermissionRequest) { Text("Nadaj uprawnienia") }
                 }
+            } else {
+                CircularProgressIndicator()
+                Text("Szukam GPS...", modifier = Modifier.padding(top = 40.dp))
             }
         }
     }
@@ -205,13 +202,10 @@ fun MyMarker(location: LatLng, profileImageUrl: String?, borderColor: Color) {
                 )
                 .build()
             context.imageLoader.enqueue(request)
-        } else {
-            imageBitmap = null
         }
     }
 
     val markerState = rememberMarkerState(position = location)
-    // Aktualizacja pozycji znacznika, gdy lokalizacja się zmienia
     LaunchedEffect(location) {
         markerState.position = location
     }
@@ -269,8 +263,6 @@ fun MapUserMarker(
                     )
                     .build()
                 context.imageLoader.enqueue(request)
-            } else {
-                imageBitmap = null
             }
         }
 
@@ -283,16 +275,9 @@ fun MapUserMarker(
             markerState.position = targetPosition
         }
 
-        val snippetText = if (isSelected && !user.aiSuggestion.isNullOrBlank()) {
-            user.aiSuggestion
-        } else {
-            user.category
-        }
-
         MarkerComposable(
             state = markerState,
             title = user.name,
-            snippet = snippetText,
             onClick = { onClick(user); false },
             zIndex = if (isSelected) 1f else 0f
         ) {
@@ -347,8 +332,6 @@ fun FlashEventMarker(
                 )
                 .build()
             context.imageLoader.enqueue(request)
-        } else {
-            imageBitmap = null
         }
     }
 
@@ -400,13 +383,15 @@ fun FourthStageSettingsFab(onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(top = 80.dp, end = 16.dp),
+            .statusBarsPadding()
+            .padding(top = 16.dp, end = 16.dp),
         contentAlignment = Alignment.TopEnd
     ) {
         FloatingActionButton(
             onClick = onClick,
-            containerColor = Color.White,
-            contentColor = Color.Black
+            containerColor = Color.White.copy(alpha = 0.8f),
+            contentColor = Color.Black,
+            shape = RoundedCornerShape(12.dp)
         ) {
             Icon(Icons.Default.Settings, contentDescription = "Ustawienia mapy")
         }
@@ -433,9 +418,10 @@ fun FourthStageControls(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
+                    .padding(bottom = 100.dp) // Nad paskiem zadań
+                    .padding(horizontal = 16.dp),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.9f)),
                 elevation = CardDefaults.cardElevation(8.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -459,19 +445,19 @@ fun FourthStageControls(
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Button(onClick = onChatClick) {
+                        Button(onClick = onChatClick, shape = RoundedCornerShape(12.dp)) {
                             Icon(Icons.AutoMirrored.Filled.Message, null)
                             Spacer(Modifier.width(4.dp))
                             Text("Czat")
                         }
                         if (!isFriend) {
-                            Button(onClick = onSendRequestClick) {
+                            Button(onClick = onSendRequestClick, shape = RoundedCornerShape(12.dp)) {
                                 Icon(Icons.Default.PersonAdd, null)
                                 Spacer(Modifier.width(4.dp))
                                 Text("Dodaj")
                             }
                         }
-                        Button(onClick = onOtherProfileClick) {
+                        Button(onClick = onOtherProfileClick, shape = RoundedCornerShape(12.dp)) {
                             Icon(Icons.Default.Person, null)
                             Spacer(Modifier.width(4.dp))
                             Text("Profil")
@@ -480,49 +466,7 @@ fun FourthStageControls(
                 }
             }
         } else {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(16.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceAround,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .clickable(onClick = onExitClick)
-                            .padding(8.dp)
-                    ) {
-                        Icon(Icons.Default.Close, contentDescription = "Wyjdź", tint = Color.Red)
-                        Text("Wyjdź", fontSize = 10.sp)
-                    }
-
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .clickable(onClick = onRadarClick)
-                            .padding(8.dp)
-                    ) {
-                        Icon(Icons.Default.Radar, contentDescription = "Blisko", tint = Color.Blue)
-                        Text("Blisko", fontSize = 10.sp)
-                    }
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .clickable(onClick = onMyProfileClick)
-                            .padding(8.dp)
-                    ) {
-                        Icon(Icons.Default.Person, contentDescription = "Profil", tint = Color(0xFF0AA4F4))
-                        Text("Profil", fontSize = 10.sp)
-                    }
-                }
-            }
+            // STARY PASEK ZAKOMENTOWANY - Funkcjonalność jest teraz na BottomNavigationBar
         }
     }
 }
@@ -550,7 +494,6 @@ fun RadarPanel(
 
     val eventCategories = listOf("Sport", "Planszówki", "Kino/Teatr", "Spacer z psem", "Nauka/Warsztaty")
 
-    val context = LocalContext.current
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
         onResult = { uri: Uri? -> selectedImageUri = uri }
@@ -564,12 +507,12 @@ fun RadarPanel(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.4f)
-                    .padding(bottom = 80.dp)
+                    .fillMaxHeight(0.45f)
+                    .padding(bottom = 100.dp) // Nad paskiem zadań
                     .padding(horizontal = 16.dp),
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(28.dp),
                 elevation = CardDefaults.cardElevation(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White)
+                colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.95f))
             ) {
                 Column {
                     Row(
@@ -614,7 +557,7 @@ fun RadarPanel(
             onDismissRequest = { showAddFlashDialog = false },
             title = { Text("Dodaj nowe wydarzenie") },
             text = {
-                Column {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     TextField(
                         value = flashTitle,
                         onValueChange = { flashTitle = it },
@@ -660,30 +603,6 @@ fun RadarPanel(
                     Button(onClick = { galleryLauncher.launch("image/*") }) {
                         Text(if (selectedImageUri != null) "Zdjęcie wybrane" else "Dodaj zdjęcie")
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = isOneTime, onCheckedChange = { isOneTime = it })
-                        Text("Zdjęcie jednorazowe")
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = isRecurring, onCheckedChange = { isRecurring = it })
-                        Text("Wydarzenie cykliczne")
-                    }
-                    if (isRecurring) {
-                        TextField(
-                            value = recurringDetails,
-                            onValueChange = { recurringDetails = it },
-                            placeholder = { Text("np. Co piątek o 20:00") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    Text("Czas trwania: ${flashDurationMinutes.toInt()} min")
-                    Slider(
-                        value = flashDurationMinutes,
-                        onValueChange = { flashDurationMinutes = it },
-                        valueRange = 15f..120f,
-                        steps = 6
-                    )
                 }
             },
             confirmButton = {
@@ -696,10 +615,9 @@ fun RadarPanel(
                         location = GeoPoint(myLocation.latitude, myLocation.longitude),
                         description = flashDescription,
                         timestamp = System.currentTimeMillis(),
-                        expiresAt = System.currentTimeMillis() + (flashDurationMinutes.toLong() * 60 * 1000),
+                        expiresAt = System.currentTimeMillis() + (60 * 60 * 1000), // Domyślnie 1h
                         isOneTime = isOneTime,
-                        isRecurring = isRecurring,
-                        recurringDetails = recurringDetails
+                        isRecurring = isRecurring
                     )
                     
                     if (selectedImageUri != null) {
@@ -717,9 +635,6 @@ fun RadarPanel(
                     }
                     showAddFlashDialog = false
                 }) { Text("Dodaj") }
-            },
-            dismissButton = {
-                Button(onClick = { showAddFlashDialog = false }) { Text("Anuluj") }
             }
         )
     }
@@ -731,25 +646,25 @@ fun RadarUserItem(user: FoundUser, distanceKm: Double, onClick: (FoundUser) -> U
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick(user) }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .size(40.dp)
-                .background(Color.LightGray, RoundedCornerShape(20.dp)),
+                .size(44.dp)
+                .background(Color.LightGray, CircleShape),
             contentAlignment = Alignment.Center
         ) {
-            Text(user.name.take(1), fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text(user.name.take(1), fontWeight = FontWeight.Bold, fontSize = 16.sp)
         }
         Spacer(Modifier.width(12.dp))
-        Text(user.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+        Text(user.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
         Spacer(Modifier.weight(1f))
         Text(
             "${String.format(Locale.US, "%.1f", distanceKm)} km",
-            style = MaterialTheme.typography.bodySmall, 
             color = Color.Gray,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp
         )
     }
 }

@@ -4,18 +4,20 @@ import android.app.Activity
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -31,9 +33,15 @@ import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AuthScreen(
     onLoginSuccess: () -> Unit
@@ -45,6 +53,7 @@ fun AuthScreen(
 
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
     var isRegisterMode by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf("") }
     var successMessage by remember { mutableStateOf("") }
@@ -68,15 +77,12 @@ fun AuthScreen(
                         },
                         onError = { error -> 
                             isLoading = false
-                            errorMessage = "Błąd logowania Google: $error"
+                            errorMessage = "Błąd: $error"
                         }
                     )
                 } catch (e: ApiException) {
                     errorMessage = "Błąd Google API: ${e.statusCode}"
-                    Log.e("AuthScreen", "Google sign in failed", e)
                 }
-            } else {
-                 errorMessage = "Logowanie Google anulowane."
             }
         }
     )
@@ -89,238 +95,186 @@ fun AuthScreen(
             .build()
     }
     val googleSignInClient = remember(context, gso) { GoogleSignIn.getClient(context, gso) }
-    // --- END GOOGLE SIGN IN ---
 
-    // --- FACEBOOK SIGN IN ---
-    val callbackManager = remember { CallbackManager.Factory.create() }
-    val loginManager = LoginManager.getInstance()
+    val primaryPurple = Color(0xFFC67CFF)
+    val buttonBlue = Color(0xFF7B96FF)
 
-    val facebookLoginLauncher = rememberLauncherForActivityResult(
-        contract = loginManager.createLogInActivityResultContract(callbackManager, null),
-        onResult = { } 
-    )
-
-    DisposableEffect(Unit) {
-        loginManager.registerCallback(callbackManager, object : FacebookCallback<LoginResult> {
-            override fun onSuccess(result: LoginResult) {
-                isLoading = true
-                FirebaseService.signInWithFacebook(result.accessToken.token,
-                    onSuccess = {
-                        // Po udanym logowaniu pobierz znajomych
-                        FirebaseService.fetchAndStoreFacebookFriends(
-                            onSuccess = {
-                                isLoading = false
-                                onLoginSuccess()
-                            },
-                            onError = { error ->
-                                isLoading = false
-                                // Nawet jeśli nie uda się pobrać znajomych, logowanie jest udane
-                                onLoginSuccess()
-                                Log.e("AuthScreen", "Friends fetch error: $error")
-                            }
-                        )
-                    },
-                    onError = { error ->
-                        isLoading = false
-                        errorMessage = "Błąd logowania Facebook: $error"
-                    }
-                )
-            }
-
-            override fun onCancel() {
-                errorMessage = "Logowanie przez Facebooka anulowane."
-            }
-
-            override fun onError(error: FacebookException) {
-                errorMessage = "Błąd Facebooka: ${error.message}"
-            }
-        })
-
-        onDispose {
-            loginManager.unregisterCallback(callbackManager)
-        }
-    }
-    // --- END FACEBOOK SIGN IN ---
-
-
-    LaunchedEffect(savedEmail) {
-        if (savedEmail.isNotEmpty() && email.isEmpty()) {
-            email = savedEmail
-        }
-    }
-
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(Color(0xFF0AA4F4), Color(0xFF1CD9C3))
-                )
-            )
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .background(primaryPurple)
     ) {
-        Text(
-            text = if (isRegisterMode) "Rejestracja" else "Logowanie",
-            fontSize = 32.sp,
-            color = Color.White,
-            modifier = Modifier.padding(bottom = 30.dp)
-        )
-
-        if (errorMessage.isNotEmpty()) {
-            Text(text = errorMessage, color = Color.Red, modifier = Modifier.padding(bottom = 10.dp))
-        }
-        if (successMessage.isNotEmpty()) {
-            Text(text = successMessage, color = Color.Green, modifier = Modifier.padding(bottom = 10.dp))
-        }
-
-        OutlinedTextField(
-            value = email,
-            onValueChange = { email = it },
-            label = { Text("Email") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-            modifier = Modifier.fillMaxWidth(),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = Color.White.copy(alpha = 0.8f),
-                unfocusedContainerColor = Color.White.copy(alpha = 0.8f)
-            )
-        )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
-            label = { Text("Hasło (min. 6 znaków)") },
-            singleLine = true,
-            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            trailingIcon = {
-                val image = if (passwordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff
-                val description = if (passwordVisible) "Ukryj hasło" else "Pokaż hasło"
-                IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                    Icon(imageVector = image, description)
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = Color.White.copy(alpha = 0.8f),
-                unfocusedContainerColor = Color.White.copy(alpha = 0.8f)
-            )
-        )
-
-        if (!isRegisterMode) {
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-                TextButton(onClick = {
-                    val cleanEmail = email.trim()
-                    if (cleanEmail.isEmpty()) {
-                        errorMessage = "Wpisz e-mail, aby zresetować hasło!"
-                    } else {
-                        isLoading = true; errorMessage = ""; successMessage = ""
-                        FirebaseService.sendPasswordResetEmail(cleanEmail,
-                            { isLoading = false; successMessage = "Wysłano e-mail resetujący!" },
-                            { error -> isLoading = false; errorMessage = "Błąd: $error" }
-                        )
-                    }
-                }) { Text("Zapomniałeś hasła?", color = Color.White, fontSize = 12.sp) }
-            }
-        } else { Spacer(modifier = Modifier.height(20.dp)) }
-
-        if (isLoading) {
-            CircularProgressIndicator(color = Color.White)
-        } else {
-            Button(
-                onClick = {
-                    isLoading = true; errorMessage = ""; successMessage = ""
-                    val cleanEmail = email.trim()
-                    val cleanPassword = password.trim()
-
-                    if (cleanEmail.isEmpty() || !android.util.Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()) {
-                        errorMessage = "Niepoprawny e-mail"; isLoading = false; return@Button
-                    }
-                    if (cleanPassword.length < 6) {
-                        errorMessage = "Za krótkie hasło"; isLoading = false; return@Button
-                    }
-
-                    if (isRegisterMode) {
-                        FirebaseService.signUp(cleanEmail, cleanPassword,
-                            { isLoading = false; successMessage = "Konto utworzone! Sprawdź e-mail."; isRegisterMode = false },
-                            { isLoading = false; errorMessage = "Błąd: $it" }
-                        )
-                    } else {
-                        FirebaseService.signIn(cleanEmail, cleanPassword,
-                            onSuccess = {
-                                scope.launch {
-                                    preferenceManager.saveEmail(cleanEmail)
-                                }
-                                isLoading = false
-                                onLoginSuccess()
-                            },
-                            onError = { isLoading = false; errorMessage = "Błąd: $it" }
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().height(50.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF006400))
+        // Górna sekcja z Logo
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.45f),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Surface(
+                modifier = Modifier.size(110.dp),
+                shape = RoundedCornerShape(28.dp),
+                color = Color.White.copy(alpha = 0.95f)
             ) {
-                Text(if (isRegisterMode) "Zarejestruj się" else "Zaloguj się")
+                Box(contentAlignment = Alignment.Center) {
+                    Text("Vibe", color = buttonBlue, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                }
             }
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "VibeApp",
+                fontSize = 34.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Przycisk logowania Google
-        Button(
-            onClick = { 
-                errorMessage = ""
-                successMessage = ""
-                googleSignInLauncher.launch(googleSignInClient.signInIntent) 
-            },
-            modifier = Modifier.fillMaxWidth().height(50.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-            contentPadding = PaddingValues(0.dp)
+        // Dolna biała karta z zaokrąglonymi rogami
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.62f)
+                .align(Alignment.BottomCenter),
+            shape = RoundedCornerShape(topStart = 45.dp, topEnd = 45.dp),
+            color = Color.White.copy(alpha = 0.98f)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 16.dp)) {
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_google_logo), // Upewnij się, że masz tę ikonę w drawable
-                    contentDescription = "Google Logo",
-                    tint = Color.Unspecified, // Ważne, aby nie zmieniać koloru ikony
-                    modifier = Modifier.size(24.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 32.dp, vertical = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = if (isRegisterMode) "Cześć!" else "Witaj ponownie!",
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF444444),
+                    modifier = Modifier.padding(bottom = 24.dp)
                 )
-                Text("Zaloguj się z Google", color = Color.Black, modifier = Modifier.padding(start = 16.dp))
-            }
-        }
 
-        Spacer(modifier = Modifier.height(8.dp))
+                if (errorMessage.isNotEmpty()) {
+                    Text(text = errorMessage, color = Color.Red, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+                }
 
-        // Przycisk logowania Facebook
-        Button(
-            onClick = { 
-                errorMessage = ""
-                successMessage = ""
-                facebookLoginLauncher.launch(listOf("email", "public_profile", "user_friends")) 
-            },
-            modifier = Modifier.fillMaxWidth().height(50.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1877F2)),
-            contentPadding = PaddingValues(0.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 16.dp)) {
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_facebook_logo),
-                    contentDescription = "Facebook Logo",
-                    tint = Color.Unspecified,
-                    modifier = Modifier.size(24.dp)
+                if (isRegisterMode) {
+                    AuthField(
+                        value = name,
+                        onValueChange = { name = it },
+                        placeholder = "Imię",
+                        icon = Icons.Default.Person
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                AuthField(
+                    value = email,
+                    onValueChange = { email = it },
+                    placeholder = "Email",
+                    icon = Icons.Default.Email,
+                    keyboardType = KeyboardType.Email
                 )
-                Text("Zaloguj się z Facebookiem", color = Color.White, modifier = Modifier.padding(start = 16.dp))
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                AuthField(
+                    value = password,
+                    onValueChange = { password = it },
+                    placeholder = "Hasło",
+                    icon = Icons.Default.Lock,
+                    isPassword = true,
+                    passwordVisible = passwordVisible,
+                    onTogglePassword = { passwordVisible = !passwordVisible }
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Button(
+                    onClick = {
+                        isLoading = true; errorMessage = ""
+                        if (isRegisterMode) {
+                            FirebaseService.signUp(email, password,
+                                onSuccess = { 
+                                    FirebaseService.updateProfileName(name, { 
+                                        isLoading = false; isRegisterMode = false; successMessage = "Zweryfikuj email" 
+                                    }, { err -> isLoading = false; errorMessage = err })
+                                },
+                                onError = { isLoading = false; errorMessage = it }
+                            )
+                        } else {
+                            FirebaseService.signIn(email, password, { isLoading = false; onLoginSuccess() }, { isLoading = false; errorMessage = it })
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = buttonBlue)
+                ) {
+                    if (isLoading) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                    else Text(if (isRegisterMode) "Zarejestruj się" else "Zaloguj się", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("lub", color = Color.Gray, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedButton(
+                    onClick = { googleSignInLauncher.launch(googleSignInClient.signInIntent) },
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, Color.LightGray)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(painter = painterResource(R.drawable.ic_google_logo), contentDescription = null, modifier = Modifier.size(20.dp), tint = Color.Unspecified)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Kontynuuj z Google", fontWeight = FontWeight.Medium, color = Color.Black)
+                    }
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                TextButton(onClick = { isRegisterMode = !isRegisterMode }) {
+                    Text(
+                        text = if (isRegisterMode) "Masz już konto? Zaloguj się" else "Nie masz konta? Zarejestruj się",
+                        color = buttonBlue,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
             }
-        }
-
-
-        Spacer(modifier = Modifier.height(10.dp))
-        TextButton(onClick = { isRegisterMode = !isRegisterMode; errorMessage = ""; successMessage = "" }) {
-            Text(if (isRegisterMode) "Masz konto? Zaloguj się" else "Nie masz konta? Zarejestruj się", color = Color.White)
         }
     }
+}
+
+@Composable
+fun AuthField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    icon: ImageVector,
+    isPassword: Boolean = false,
+    passwordVisible: Boolean = false,
+    onTogglePassword: () -> Unit = {},
+    keyboardType: KeyboardType = KeyboardType.Text
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        placeholder = { Text(placeholder, color = Color.Gray) },
+        leadingIcon = { Icon(icon, null, tint = Color(0xFF666666)) },
+        trailingIcon = if (isPassword) {
+            {
+                IconButton(onClick = onTogglePassword) {
+                    Icon(if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff, null, tint = Color.Gray)
+                }
+            }
+        } else null,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        singleLine = true,
+        visualTransformation = if (isPassword && !passwordVisible) PasswordVisualTransformation() else VisualTransformation.None,
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Color(0xFF7B96FF),
+            unfocusedBorderColor = Color.LightGray
+        )
+    )
 }
