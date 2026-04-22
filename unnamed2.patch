@@ -1,0 +1,252 @@
+Index: app/src/main/java/pl/example/connectnear/ProfileScreen.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/ProfileScreen.kt b/app/src/main/java/pl/example/connectnear/ProfileScreen.kt
+--- a/app/src/main/java/pl/example/connectnear/ProfileScreen.kt
++++ b/app/src/main/java/pl/example/connectnear/ProfileScreen.kt
+@@ -57,6 +57,7 @@
+     var smoking by remember { mutableStateOf("") }
+     var drinking by remember { mutableStateOf("") }
+     var personalityType by remember { mutableStateOf("") }
++    var isProfilePublic by remember { mutableStateOf(true) } // Nowy stan
+ 
+     var selectedTab by remember { mutableStateOf(0) }
+     var showPasswordDialog by remember { mutableStateOf(false) }
+@@ -67,6 +68,7 @@
+             userSelection = data; name = data.name; description = data.description
+             profileImageUrl = data.profileImageUrl; interests = if (data.interests.isNullOrEmpty()) emptyList() else data.interests.split(",").map { it.trim() }
+             userStatus = data.userStatus; smoking = data.smoking; drinking = data.drinking; personalityType = data.personalityType
++            isProfilePublic = data.isProfilePublic // Wczytujemy nowy stan
+         }
+         isLoading = false
+     }
+@@ -194,6 +196,24 @@
+ 
+                 AnimatedVisibility(visible = selectedTab == 1) {
+                     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
++                        // --- NOWY PRZEŁĄCZNIK PRYWATNOŚCI ---
++                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 16.dp)) {
++                            Text("Profil publiczny", color = Color.White, fontWeight = FontWeight.Bold)
++                            Spacer(modifier = Modifier.weight(1f))
++                            Switch(checked = isProfilePublic, onCheckedChange = { 
++                                isProfilePublic = it 
++                                // Od razu zapisujemy zmianę w tle
++                                scope.launch {
++                                    val updatedUser = userSelection?.copy(isProfilePublic = it)
++                                    if (updatedUser != null) {
++                                        FirebaseService.updateFullProfile(updatedUser, onSuccess = {}, onError = {})
++                                    }
++                                }
++                            })
++                        }
++                        Text("Gdy profil jest prywatny, tylko Twoi znajomi widzą Twoje zdjęcia i sociale.", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 16.dp))
++                        Divider(modifier = Modifier.padding(vertical = 8.dp))
++
+                         Button(onClick = onFriendsClick) { Text("Znajomi i sugestie") }
+                         Button(onClick = onChatsClick) { Text("Czaty") }
+                         Button(onClick = onGroupsClick) { Text("Grupy") }
+Index: app/src/main/java/pl/example/connectnear/UserSelection.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/pl/example/connectnear/UserSelection.kt b/app/src/main/java/pl/example/connectnear/UserSelection.kt
+--- a/app/src/main/java/pl/example/connectnear/UserSelection.kt
++++ b/app/src/main/java/pl/example/connectnear/UserSelection.kt
+@@ -4,146 +4,90 @@
+ 
+ data class UserSelection(
+     var userId: String = "",
+-    var customId: String = "",
+     var name: String = "",
++    var customId: String = "",
++    var description: String = "",
++    var profileImageUrl: String = "",
++    var location: GeoPoint? = null,
++    var timestamp: Long = 0L,
++    var shareLocation: Boolean = true,
+     var category: String = "",
++    var visibilityMode: String = "public",
++    var locationUpdateInterval: Long = 5000L,
++    var searchRadiusKm: Double = 25.0,
++    var myAge: String = "",
++    var preferredAge: String = "",
++    var mySex: String = "",
++    var preferredSex: String = "",
+ 
+-    var subCategory: String = "",
+-    var interests: String = "",
+-
+-    // Pola dla Sportu
++    // Sport
+     var sportMode: String = "",
+     var sportLevel: String = "",
+-    var trainerDescription: String = "",
++    var isPersonalTrainer: Boolean = false,
+ 
+-    // Pola dla Nauki
++    // Nauka
+     var learningMode: String = "",
+     var subject: String = "",
+     var learningLevel: String = "",
+-    var tutorDescription: String = "",
+-    
+-    // Pola dla Randki
++    var isTutor: Boolean = false,
++
++    // Randka
+     var dateMode: String = "",
+     var datePartnerGender: String = "",
+     var dateCoupleGender: String = "",
+     var dateAnimalType: String = "",
+     var dateOtherAnimal: String = "",
+-    
+-    // Pola dla Imprezy
++
++    // Impreza
+     var partyType: String = "",
+-
+-    // Pole dla Osobowości
+-    var personalityType: String = "",
+-
+-    // Nowe pola: używki
++    
++    // Nowe pola profilu
++    var interests: String = "",
++    var userStatus: String = "",
+     var smoking: String = "",
+     var drinking: String = "",
+-
+-    // Flagi usług
+-    var isPersonalTrainer: Boolean = false,
+-    var isTutor: Boolean = false,
+-    var isStudyBuddy: Boolean = false,
+-
+-    // Status użytkownika
+-    var userStatus: String = "",
+-    var vibe: String = "", // Nowe pole: "Vibe Check" / Nastrój
+-
+-    // Preferencje
+-    var myAge: String = "",
+-    var preferredAge: String = "",
+-    var mySex: String = "",
+-    var preferredSex: String = "",
+-
+-    // Dane lokalizacji i profilu
+-    var location: GeoPoint? = null,
+-    var profileImageUrl: String = "",
+-    var description: String = "",
+-    var locationUpdateInterval: Long = 60000L,
+-
+-    // Social Media & Integracje
+-    var instagramLink: String = "",
+-    var facebookLink: String = "",
+-    var tiktokLink: String = "",
+-    var messengerLink: String = "",
+-    var youtubeLink: String = "",
+-    var twitterLink: String = "",
+-    var snapchatLink: String = "",
+-    var spotifyLink: String = "",
+-    var steamLink: String = "",
+-    var filmwebLink: String = "", // Nowe pole: Integracja z Filmweb
+-    var letterboxdLink: String = "", // Nowe pole: Integracja z Letterboxd
+-    
+-    // Tagi
+-    var tags: List<String> = emptyList(), // Nowe pole: Tagi zainteresowań
+-
+-    // Znajomi z Facebooka
+-    var facebookFriends: List<String> = emptyList(),
+-    var facebookId: String = "",
++    var personalityType: String = "",
++    var isProfilePublic: Boolean = true,
+ 
+-    // Ustawienia
+-    var visibilityMode: String = "public",
+-    var searchRadiusKm: Double = 50.0,
+-    var shareLocation: Boolean = true,
+-
+-    var timestamp: Long = 0L // DODANO BRAKUJĄCE POLE
++    // Podkategoria
++    var subCategory: String = ""
+ ) {
+     fun updateWith(other: UserSelection) {
+         this.userId = other.userId
+-        this.customId = other.customId
+         this.name = other.name
++        this.customId = other.customId
++        this.description = other.description
++        this.profileImageUrl = other.profileImageUrl
++        this.location = other.location
++        this.timestamp = other.timestamp
++        this.shareLocation = other.shareLocation
+         this.category = other.category
+-        this.subCategory = other.subCategory
+-        this.interests = other.interests
++        this.visibilityMode = other.visibilityMode
++        this.locationUpdateInterval = other.locationUpdateInterval
++        this.searchRadiusKm = other.searchRadiusKm
++        this.myAge = other.myAge
++        this.preferredAge = other.preferredAge
++        this.mySex = other.mySex
++        this.preferredSex = other.preferredSex
+         this.sportMode = other.sportMode
+         this.sportLevel = other.sportLevel
+-        this.trainerDescription = other.trainerDescription
++        this.isPersonalTrainer = other.isPersonalTrainer
+         this.learningMode = other.learningMode
+         this.subject = other.subject
+         this.learningLevel = other.learningLevel
+-        this.tutorDescription = other.tutorDescription
+-        this.isPersonalTrainer = other.isPersonalTrainer
+         this.isTutor = other.isTutor
+-        this.isStudyBuddy = other.isStudyBuddy
+-        this.userStatus = other.userStatus
+-        this.vibe = other.vibe
+-        this.myAge = other.myAge
+-        this.preferredAge = other.preferredAge
+-        this.mySex = other.mySex
+-        this.preferredSex = other.preferredSex
+-        this.location = other.location
+-        this.profileImageUrl = other.profileImageUrl
+-        this.description = other.description
+-        this.locationUpdateInterval = other.locationUpdateInterval
+-        this.instagramLink = other.instagramLink
+-        this.facebookLink = other.facebookLink
+-        this.tiktokLink = other.tiktokLink
+-        this.messengerLink = other.messengerLink
+-        this.youtubeLink = other.youtubeLink
+-        this.twitterLink = other.twitterLink
+-        this.snapchatLink = other.snapchatLink
+-        this.spotifyLink = other.spotifyLink
+-        this.steamLink = other.steamLink
+-        this.filmwebLink = other.filmwebLink
+-        this.letterboxdLink = other.letterboxdLink
+-        this.tags = other.tags
+-        this.facebookFriends = other.facebookFriends
+-        this.facebookId = other.facebookId
+-        this.visibilityMode = other.visibilityMode
+-        this.searchRadiusKm = other.searchRadiusKm
+-        this.shareLocation = other.shareLocation
+-        
+         this.dateMode = other.dateMode
+         this.datePartnerGender = other.datePartnerGender
+         this.dateCoupleGender = other.dateCoupleGender
+         this.dateAnimalType = other.dateAnimalType
+         this.dateOtherAnimal = other.dateOtherAnimal
+-
+         this.partyType = other.partyType
+-        this.personalityType = other.personalityType
+-        
++        this.subCategory = other.subCategory
++        this.isProfilePublic = other.isProfilePublic
++        this.interests = other.interests
++        this.userStatus = other.userStatus
+         this.smoking = other.smoking
+         this.drinking = other.drinking
+-
+-        this.timestamp = other.timestamp // DODANO AKTUALIZACJĘ
++        this.personalityType = other.personalityType
+     }
+ }
