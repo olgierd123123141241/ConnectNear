@@ -9,10 +9,10 @@
             <InsightsFilterSettings>
               <option name="connection">
                 <ConnectionSetting>
-                  <option name="appId" value="PLACEHOLDER" />
-                  <option name="mobileSdkAppId" value="" />
-                  <option name="projectId" value="" />
-                  <option name="projectNumber" value="" />
+                  <option name="appId" value="pl.example.connectnear" />
+                  <option name="mobileSdkAppId" value="1:438952007650:android:cacb1cb1bb21ca098e4bbb" />
+                  <option name="projectId" value="connectnear-fda9c" />
+                  <option name="projectNumber" value="438952007650" />
                 </ConnectionSetting>
               </option>
               <option name="signal" value="SIGNAL_UNSPECIFIED" />
