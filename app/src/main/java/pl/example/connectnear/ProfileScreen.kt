@@ -25,11 +25,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import pl.example.connectnear.ui.theme.ConnectNearTheme
 import pl.example.connectnear.ui.theme.getCategoryGradient
 
+// GŁÓWNY EKRAN PROFILU - Obsługuje wyświetlanie danych, edycję i automatyczny zapis
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(
@@ -44,6 +49,7 @@ fun ProfileScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    // Stan użytkownika i pól edycyjnych
     var userSelection by remember { mutableStateOf<UserSelection?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var message by remember { mutableStateOf("") }
@@ -57,52 +63,82 @@ fun ProfileScreen(
     var smoking by remember { mutableStateOf("") }
     var drinking by remember { mutableStateOf("") }
     var personalityType by remember { mutableStateOf("") }
-    var isProfilePublic by remember { mutableStateOf(true) } // Nowy stan
+    var isProfilePublic by remember { mutableStateOf(true) }
 
     var selectedTab by remember { mutableStateOf(0) }
     var showPasswordDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
-    fun loadUserData(data: UserSelection?) {
-        if (data != null) {
-            userSelection = data; name = data.name; description = data.description
-            profileImageUrl = data.profileImageUrl; interests = if (data.interests.isNullOrEmpty()) emptyList() else data.interests.split(",").map { it.trim() }
-            userStatus = data.userStatus; smoking = data.smoking; drinking = data.drinking; personalityType = data.personalityType
-            isProfilePublic = data.isProfilePublic // Wczytujemy nowy stan
+    // Mechanizm opóźnionego zapisu (Debounce)
+    var debounceJob by remember { mutableStateOf<Job?>(null) }
+
+    // FUNKCJA ZAPISUJĄCA: Wywoływana automatycznie przy zmianie danych
+    fun triggerAutoSave() {
+        debounceJob?.cancel()
+        debounceJob = scope.launch {
+            delay(1000) // Czekaj 1s przed wysłaniem do Firebase
+            userSelection?.let {
+                val updatedUser = it.copy(
+                    name = name,
+                    description = description,
+                    profileImageUrl = profileImageUrl,
+                    interests = interests.joinToString(","),
+                    userStatus = userStatus,
+                    smoking = smoking,
+                    drinking = drinking,
+                    personalityType = personalityType,
+                    isProfilePublic = isProfilePublic
+                )
+                FirebaseService.updateFullProfile(updatedUser, 
+                    onSuccess = { message = "Zapisano automatycznie" }, 
+                    onError = { err -> message = "Błąd zapisu" }
+                )
+            }
         }
-        isLoading = false
     }
 
+    // Ładowanie danych z bazy przy otwarciu ekranu
     LaunchedEffect(Unit) {
         userEmail = FirebaseService.auth.currentUser?.email ?: "Brak"
-        FirebaseService.getCurrentUserProfile { loadUserData(it) }
+        FirebaseService.getCurrentUserProfile { data ->
+            if (data != null) {
+                userSelection = data; name = data.name; description = data.description
+                profileImageUrl = data.profileImageUrl; interests = if (data.interests.isNullOrEmpty()) emptyList() else data.interests.split(",").map { it.trim() }
+                userStatus = data.userStatus; smoking = data.smoking; drinking = data.drinking; personalityType = data.personalityType
+                isProfilePublic = data.isProfilePublic
+            }
+            isLoading = false
+        }
     }
 
+    // AUTOMATYCZNY ZAPIS: Śledzi zmiany we wszystkich polach
+    LaunchedEffect(name, description, userStatus, smoking, drinking, personalityType, isProfilePublic, interests) {
+        if (!isLoading) triggerAutoSave()
+    }
+
+    // Wybór zdjęcia z galerii
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
              val oldImageUrl = profileImageUrl
             isLoading = true
             message = "Wgrywanie zdjęcia..."
-            FirebaseService.uploadFileToStorage(it, "profile_pictures", userSelection!!.userId, onSuccess = {
-                profileImageUrl = it
-                 scope.launch {
-                    val updatedUser = userSelection?.copy(profileImageUrl = it)
-                    if (updatedUser != null) {
-                        FirebaseService.updateFullProfile(updatedUser, 
-                            onSuccess = { message = "Zapisano!"; isLoading = false }, 
-                            onError = { error -> message = "Błąd: $error"; isLoading = false }
-                        )
-                    }
-                }
+            FirebaseService.uploadFileToStorage(it, "profile_pictures", userSelection!!.userId, onSuccess = { newUrl ->
+                profileImageUrl = newUrl
+                triggerAutoSave()
                 if(oldImageUrl.isNotEmpty()) FirebaseService.deleteFileFromStorage(oldImageUrl, {}, {})
-
-            }, onError = { message = "Błąd: $it"; isLoading = false })
+                isLoading = false
+            }, onError = { err -> message = "Błąd: $err"; isLoading = false })
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    // Główny kontener tła (Zapewnia jednolity kolor na całym ekranie)
+    Box(modifier = Modifier.fillMaxSize().background(getCategoryGradient(userSelection?.category ?: ""))) {
         Column(
-            modifier = Modifier.fillMaxSize().background(getCategoryGradient(userSelection?.category ?: "")).padding(16.dp).padding(bottom = 80.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding() // Obsługa paska powiadomień
+                .padding(16.dp)
+                .padding(bottom = 80.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text("Twój Profil", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.padding(bottom = 20.dp))
@@ -118,6 +154,7 @@ fun ProfileScreen(
                 Spacer(modifier = Modifier.height(20.dp))
                 CustomProfileTextField(value = name, onValueChange = { name = it }, label = "Twój Nick", modifier = Modifier.fillMaxWidth())
                 Spacer(modifier = Modifier.height(8.dp))
+                
                 Text("Twój Status:", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 
                 val statuses = listOf(
@@ -128,14 +165,24 @@ fun ProfileScreen(
                 )
 
                 Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                    statuses.forEach { (key, label, description) ->
+                    statuses.forEach { (key, label, descriptionText) ->
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).background(if (userStatus == key) Color.White.copy(0.2f) else Color.Transparent, RoundedCornerShape(8.dp)).border(1.dp, if (userStatus == key) Color.White else Color.Gray, RoundedCornerShape(8.dp)).clip(RoundedCornerShape(8.dp)).clickable { userStatus = key }.padding(8.dp)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .background(if (userStatus == key) Color.White.copy(0.2f) else Color.Transparent, RoundedCornerShape(8.dp))
+                                .border(1.dp, if (userStatus == key) Color.White else Color.Gray, RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { userStatus = key }
+                                .padding(8.dp)
                         ) {
                             RadioButton(selected = userStatus == key, onClick = { userStatus = key }, colors = RadioButtonDefaults.colors(selectedColor = Color.White, unselectedColor = Color.Gray))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Column { Text(text = label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp); if (description.isNotEmpty()) Text(text = description, color = Color.White.copy(0.7f), fontSize = 12.sp) }
+                            Column { 
+                                Text(text = label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                if (descriptionText.isNotEmpty()) Text(text = descriptionText, color = Color.White.copy(0.7f), fontSize = 12.sp) 
+                            }
                         }
                     }
                 }
@@ -154,9 +201,7 @@ fun ProfileScreen(
                  AnimatedVisibility(visible = selectedTab == 0) {
                     Column {
                         InterestTagEditor(currentInterests = interests.joinToString(", "), onInterestsChange = { interests = it.split(',').map { tag -> tag.trim() } })
-
                         Spacer(modifier = Modifier.height(16.dp))
-                        
                         Text("Styl Życia (Opcjonalne)", color = Color.White, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(8.dp))
 
@@ -177,10 +222,7 @@ fun ProfileScreen(
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Typ osobowości", color = Color.White, fontWeight = FontWeight.Bold)
-                            IconButton(onClick = { /* Handle info click */ }) { Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(16.dp)) }
-                        }
+                        Text("Typ osobowości", color = Color.White, fontWeight = FontWeight.Bold)
                         val personalityTypes = listOf("Introwertyk", "Ekstrawertyk", "Ambiwertyk", "Nie chcę podawać")
                         
                         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
@@ -196,60 +238,45 @@ fun ProfileScreen(
 
                 AnimatedVisibility(visible = selectedTab == 1) {
                     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // --- NOWY PRZEŁĄCZNIK PRYWATNOŚCI ---
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 16.dp)) {
                             Text("Profil publiczny", color = Color.White, fontWeight = FontWeight.Bold)
                             Spacer(modifier = Modifier.weight(1f))
-                            Switch(checked = isProfilePublic, onCheckedChange = { 
-                                isProfilePublic = it 
-                                // Od razu zapisujemy zmianę w tle
-                                scope.launch {
-                                    val updatedUser = userSelection?.copy(isProfilePublic = it)
-                                    if (updatedUser != null) {
-                                        FirebaseService.updateFullProfile(updatedUser, onSuccess = {}, onError = {})
-                                    }
-                                }
-                            })
+                            Switch(checked = isProfilePublic, onCheckedChange = { isProfilePublic = it })
                         }
                         Text("Gdy profil jest prywatny, tylko Twoi znajomi widzą Twoje zdjęcia i sociale.", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 16.dp))
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
-
+                        
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(0.2f))
+                        
                         Button(onClick = onFriendsClick) { Text("Znajomi i sugestie") }
                         Button(onClick = onChatsClick) { Text("Czaty") }
                         Button(onClick = onGroupsClick) { Text("Grupy") }
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
                         Button(onClick = onEditSocialsClick) { Text("Edytuj Social Media") }
                         Button(onClick = onEditPreferencesClick) { Text("Edytuj preferencje matcha") }
                         Button(onClick = onBlockedUsersClick) { Text("Zablokowani użytkownicy") }
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
+                        
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(0.2f))
+                        
                         Button(onClick = { showPasswordDialog = true }) { Text("Zmień hasło") }
-                        OutlinedButton(onClick = onLogoutClick) { Text("Wyloguj") }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        TextButton(onClick = { showDeleteDialog = true }) { Text("Usuń konto", color = MaterialTheme.colorScheme.error) }
+                        OutlinedButton(onClick = onLogoutClick, colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)) { Text("Wyloguj") }
+                        TextButton(onClick = { showDeleteDialog = true }) { Text("Usuń konto", color = Color.Red.copy(0.8f)) }
                     }
                 }
             }
         }
         
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.Bottom, horizontalAlignment = Alignment.CenterHorizontally) {
-            if (message.isNotEmpty()) Text(message, color = if (message.startsWith("Błąd")) Color.Red else Color.Green)
-            Button(onClick = {
-                 scope.launch {
-                    isLoading = true; message = "Zapisywanie..."
-                    val updatedUser = userSelection?.copy(name = name, description = description, profileImageUrl = profileImageUrl, interests = interests.joinToString(","), userStatus = userStatus, smoking = smoking, drinking = drinking, personalityType = personalityType)
-                    if (updatedUser != null) {
-                        FirebaseService.updateFullProfile(updatedUser, 
-                            onSuccess = { message = "Zapisano!"; isLoading = false }, 
-                            onError = { error -> message = "Błąd: $error"; isLoading = false }
-                        )
-                    } else { message = "Błąd: Brak danych"; isLoading = false }
+        // Pasek powiadomień o stanie zapisu
+        if (message.isNotEmpty()) {
+            Box(modifier = Modifier.fillMaxSize().padding(bottom = 100.dp), contentAlignment = Alignment.BottomCenter) {
+                Surface(color = Color.Black.copy(0.6f), shape = RoundedCornerShape(16.dp)) {
+                    Text(message, color = Color.White, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 12.sp)
                 }
-            }, modifier = Modifier.fillMaxWidth().height(50.dp), enabled = !isLoading) { Text("Zapisz zmiany") }
+            }
         }
         
-        if (isLoading) Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        if (isLoading) Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Color.White) }
     }
 
+    // DIALOG ZMIANY HASŁA
     if (showPasswordDialog) {
         ChangePasswordDialog(onDismiss = { showPasswordDialog = false }) { old, new ->
             FirebaseService.updatePassword(new, old, 
@@ -259,6 +286,7 @@ fun ProfileScreen(
         }
     }
 
+    // DIALOG USUNIĘCIA KONTA
     if (showDeleteDialog) {
         DeleteAccountDialog(onDismiss = { showDeleteDialog = false }) { password ->
             FirebaseService.deleteAccount(password, 
@@ -269,6 +297,7 @@ fun ProfileScreen(
     }
 }
 
+// Funkcja pomocnicza: Wyświetla dialog zmiany hasła
 @Composable
 fun ChangePasswordDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
     var oldPassword by remember { mutableStateOf("") }
@@ -276,10 +305,20 @@ fun ChangePasswordDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> U
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Zmień hasło") }, text = { Column { TextField(value = oldPassword, onValueChange = { oldPassword = it }, label = { Text("Obecne hasło") }, visualTransformation = PasswordVisualTransformation()); Spacer(modifier = Modifier.height(8.dp)); TextField(value = newPassword, onValueChange = { newPassword = it }, label = { Text("Nowe hasło") }, visualTransformation = PasswordVisualTransformation()) } }, confirmButton = { Button(onClick = { onConfirm(oldPassword, newPassword) }) { Text("Zmień") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } })
 }
 
+// Funkcja pomocnicza: Wyświetla dialog usunięcia konta
 @Composable
 fun DeleteAccountDialog(onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var password by remember { mutableStateOf("") }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Usuń konto") }, text = { Column { Text("Aby usunąć konto, wpisz swoje hasło. Tej operacji nie można cofnąć."); Spacer(modifier = Modifier.height(8.dp)); TextField(value = password, onValueChange = { password = it }, label = { Text("Hasło") }, visualTransformation = PasswordVisualTransformation()) } }, confirmButton = { Button(onClick = { onConfirm(password) }, colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) { Text("Usuń konto") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } })
 }
 
-// Definicje CustomProfileTextField, InterestTagEditor, TabButton, ProfileAvatarSection są w innych plikach (np. ProfileComponents.kt)
+@Preview(showBackground = true)
+@Composable
+fun ProfileScreenPreview() {
+    ConnectNearTheme {
+        ProfileScreen(
+            onLogoutClick = {}, onEditPreferencesClick = {}, onBlockedUsersClick = {},
+            onEditSocialsClick = {}, onFriendsClick = {}, onChatsClick = {}, onGroupsClick = {}
+        )
+    }
+}

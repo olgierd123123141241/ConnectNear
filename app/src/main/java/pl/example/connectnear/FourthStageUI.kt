@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.imageLoader
@@ -41,6 +42,7 @@ import com.google.android.gms.maps.model.LatLng
 import com.google.firebase.firestore.GeoPoint
 import com.google.maps.android.compose.*
 import java.util.Locale
+import pl.example.connectnear.ui.theme.ConnectNearTheme
 import pl.example.connectnear.ui.theme.getCategoryPrimaryColor
 
 @Composable
@@ -465,8 +467,6 @@ fun FourthStageControls(
                     }
                 }
             }
-        } else {
-            // STARY PASEK ZAKOMENTOWANY - Funkcjonalność jest teraz na BottomNavigationBar
         }
     }
 }
@@ -494,6 +494,7 @@ fun RadarPanel(
 
     val eventCategories = listOf("Sport", "Planszówki", "Kino/Teatr", "Spacer z psem", "Nauka/Warsztaty")
 
+    val context = LocalContext.current
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
         onResult = { uri: Uri? -> selectedImageUri = uri }
@@ -678,4 +679,24 @@ fun calculateDistance(loc1: LatLng, loc2: LatLng): Double {
             Math.sin(dLon / 2) * Math.sin(dLon / 2)
     val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
     return r * c
+}
+
+@Preview(showBackground = true)
+@Composable
+fun FourthStagePreview() {
+    ConnectNearTheme {
+        FourthStageUI(
+            uiState = MapUiState(
+                myLocation = LatLng(52.2297, 21.0122),
+                hasPermission = true
+            ),
+            userSelection = UserSelection(name = "Test", category = "Sport"),
+            onBackClick = {},
+            onChatClick = { _, _, _ -> },
+            onProfileClick = {},
+            onOtherUserProfileClick = {},
+            onUserSelected = {},
+            onUserDeselected = {}
+        )
+    }
 }
