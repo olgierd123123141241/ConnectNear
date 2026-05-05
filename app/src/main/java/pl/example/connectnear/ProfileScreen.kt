@@ -34,7 +34,6 @@ import kotlinx.coroutines.launch
 import pl.example.connectnear.ui.theme.ConnectNearTheme
 import pl.example.connectnear.ui.theme.getCategoryGradient
 
-// GŁÓWNY EKRAN PROFILU - Obsługuje wyświetlanie danych, edycję i automatyczny zapis
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(
@@ -49,7 +48,6 @@ fun ProfileScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Stan użytkownika i pól edycyjnych
     var userSelection by remember { mutableStateOf<UserSelection?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var message by remember { mutableStateOf("") }
@@ -68,15 +66,14 @@ fun ProfileScreen(
     var selectedTab by remember { mutableStateOf(0) }
     var showPasswordDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showPersonalityInfoDialog by remember { mutableStateOf(false) }
 
-    // Mechanizm opóźnionego zapisu (Debounce)
     var debounceJob by remember { mutableStateOf<Job?>(null) }
 
-    // FUNKCJA ZAPISUJĄCA: Wywoływana automatycznie przy zmianie danych
     fun triggerAutoSave() {
         debounceJob?.cancel()
         debounceJob = scope.launch {
-            delay(1000) // Czekaj 1s przed wysłaniem do Firebase
+            delay(1000)
             userSelection?.let {
                 val updatedUser = it.copy(
                     name = name,
@@ -91,13 +88,12 @@ fun ProfileScreen(
                 )
                 FirebaseService.updateFullProfile(updatedUser, 
                     onSuccess = { message = "Zapisano automatycznie" }, 
-                    onError = { err -> message = "Błąd zapisu" }
+                    onError = { err -> message = "Błąd zapisu: $err" }
                 )
             }
         }
     }
 
-    // Ładowanie danych z bazy przy otwarciu ekranu
     LaunchedEffect(Unit) {
         userEmail = FirebaseService.auth.currentUser?.email ?: "Brak"
         FirebaseService.getCurrentUserProfile { data ->
@@ -111,12 +107,10 @@ fun ProfileScreen(
         }
     }
 
-    // AUTOMATYCZNY ZAPIS: Śledzi zmiany we wszystkich polach
     LaunchedEffect(name, description, userStatus, smoking, drinking, personalityType, isProfilePublic, interests) {
         if (!isLoading) triggerAutoSave()
     }
 
-    // Wybór zdjęcia z galerii
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
              val oldImageUrl = profileImageUrl
@@ -131,12 +125,11 @@ fun ProfileScreen(
         }
     }
 
-    // Główny kontener tła (Zapewnia jednolity kolor na całym ekranie)
     Box(modifier = Modifier.fillMaxSize().background(getCategoryGradient(userSelection?.category ?: ""))) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .statusBarsPadding() // Obsługa paska powiadomień
+                .statusBarsPadding()
                 .padding(16.dp)
                 .padding(bottom = 80.dp),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -222,15 +215,20 @@ fun ProfileScreen(
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text("Typ osobowości", color = Color.White, fontWeight = FontWeight.Bold)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Typ osobowości", color = Color.White, fontWeight = FontWeight.Bold)
+                            IconButton(onClick = { showPersonalityInfoDialog = true }) {
+                                Icon(Icons.Default.HelpOutline, contentDescription = "Info", tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
+                            }
+                        }
                         val personalityTypes = listOf("Introwertyk", "Ekstrawertyk", "Ambiwertyk", "Nie chcę podawać")
                         
                         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                              Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
-                                 personalityTypes.take(2).forEach { type -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) { RadioButton(selected = personalityType == type, onClick = { personalityType = type }); Text(type, color = Color.White, fontSize = 12.sp) } }
+                                 personalityTypes.take(2).forEach { type -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) { RadioButton(selected = personalityType == type, onClick = { personalityType = type }, colors = RadioButtonDefaults.colors(selectedColor = Color.White, unselectedColor = Color.Gray)); Text(type, color = Color.White, fontSize = 12.sp) } }
                              }
                              Row(horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
-                                 personalityTypes.drop(2).forEach { type -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) { RadioButton(selected = personalityType == type, onClick = { personalityType = type }); Text(type, color = Color.White, fontSize = 12.sp) } }
+                                 personalityTypes.drop(2).forEach { type -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) { RadioButton(selected = personalityType == type, onClick = { personalityType = type }, colors = RadioButtonDefaults.colors(selectedColor = Color.White, unselectedColor = Color.Gray)); Text(type, color = Color.White, fontSize = 12.sp) } }
                              }
                         }
                     }
@@ -257,18 +255,24 @@ fun ProfileScreen(
                         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(0.2f))
                         
                         Button(onClick = { showPasswordDialog = true }) { Text("Zmień hasło") }
-                        OutlinedButton(onClick = onLogoutClick, colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)) { Text("Wyloguj") }
+                        OutlinedButton(
+                            onClick = {
+                                FirebaseService.signOut()
+                                onLogoutClick()
+                            }, 
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                        ) { Text("Wyloguj") }
                         TextButton(onClick = { showDeleteDialog = true }) { Text("Usuń konto", color = Color.Red.copy(0.8f)) }
                     }
                 }
             }
         }
         
-        // Pasek powiadomień o stanie zapisu
+        // Pasek powiadomień o stanie zapisu na samym dole
         if (message.isNotEmpty()) {
-            Box(modifier = Modifier.fillMaxSize().padding(bottom = 100.dp), contentAlignment = Alignment.BottomCenter) {
-                Surface(color = Color.Black.copy(0.6f), shape = RoundedCornerShape(16.dp)) {
-                    Text(message, color = Color.White, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 12.sp)
+            Box(modifier = Modifier.fillMaxSize().padding(bottom = 16.dp), contentAlignment = Alignment.BottomCenter) {
+                Surface(color = Color.Black.copy(0.7f), shape = RoundedCornerShape(24.dp)) {
+                    Text(message, color = Color.White, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp), fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 }
             }
         }
@@ -276,40 +280,98 @@ fun ProfileScreen(
         if (isLoading) Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Color.White) }
     }
 
+    // DIALOG INFORMACYJNY O TYPACH OSOBOWOŚCI
+    if (showPersonalityInfoDialog) {
+        AlertDialog(
+            onDismissRequest = { showPersonalityInfoDialog = false },
+            title = { Text("Typy Osobowości") },
+            text = {
+                Column {
+                    Text(text = "• Introwertyk:", fontWeight = FontWeight.Bold)
+                    Text("Czerpie energię z czasu spędzonego w samotności, woli głębokie rozmowy w małym gronie.\n")
+                    Text(text = "• Ekstrawertyk:", fontWeight = FontWeight.Bold)
+                    Text("Czerpie energię z interakcji z ludźmi, lubi być w centrum uwagi i otoczeniu wielu osób.\n")
+                    Text(text = "• Ambiwertyk:", fontWeight = FontWeight.Bold)
+                    Text("Posiada cechy obu typów; potrafi cieszyć się towarzystwem, ale potrzebuje też czasu dla siebie.\n")
+                    Text(text = "• Nie chcę podawać:", fontWeight = FontWeight.Bold)
+                    Text("Wybór neutralny, jeśli nie chcesz etykietować swojej osobowości.")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPersonalityInfoDialog = false }) { Text("Rozumiem") }
+            }
+        )
+    }
+
     // DIALOG ZMIANY HASŁA
     if (showPasswordDialog) {
         ChangePasswordDialog(onDismiss = { showPasswordDialog = false }) { old, new ->
-            FirebaseService.updatePassword(new, old, 
-                onSuccess = { Toast.makeText(context, "Hasło zmienione", Toast.LENGTH_SHORT).show(); showPasswordDialog = false },
-                onError = { Toast.makeText(context, "Błąd: $it", Toast.LENGTH_SHORT).show() }
+            FirebaseService.updatePassword(
+                newPass = new, 
+                oldPass = old, 
+                onSuccess = { 
+                    Toast.makeText(context, "Hasło zmienione", Toast.LENGTH_SHORT).show()
+                    showPasswordDialog = false 
+                },
+                onError = { err -> 
+                    Toast.makeText(context, "Błąd: $err", Toast.LENGTH_SHORT).show() 
+                }
             )
         }
     }
 
     // DIALOG USUNIĘCIA KONTA
     if (showDeleteDialog) {
-        DeleteAccountDialog(onDismiss = { showDeleteDialog = false }) { password ->
-            FirebaseService.deleteAccount(password, 
-                onSuccess = { Toast.makeText(context, "Konto usunięte", Toast.LENGTH_SHORT).show(); onLogoutClick() },
-                onError = { Toast.makeText(context, "Błąd: $it", Toast.LENGTH_SHORT).show() }
+        DeleteAccountDialog(onDismiss = { showDeleteDialog = false }) { passwordValue ->
+            FirebaseService.deleteAccount(
+                pass = passwordValue, 
+                onSuccess = { 
+                    Toast.makeText(context, "Konto usunięte", Toast.LENGTH_SHORT).show()
+                    onLogoutClick() 
+                },
+                onError = { err -> 
+                    Toast.makeText(context, "Błąd: $err", Toast.LENGTH_SHORT).show() 
+                }
             )
         }
     }
 }
 
-// Funkcja pomocnicza: Wyświetla dialog zmiany hasła
 @Composable
 fun ChangePasswordDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
     var oldPassword by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Zmień hasło") }, text = { Column { TextField(value = oldPassword, onValueChange = { oldPassword = it }, label = { Text("Obecne hasło") }, visualTransformation = PasswordVisualTransformation()); Spacer(modifier = Modifier.height(8.dp)); TextField(value = newPassword, onValueChange = { newPassword = it }, label = { Text("Nowe hasło") }, visualTransformation = PasswordVisualTransformation()) } }, confirmButton = { Button(onClick = { onConfirm(oldPassword, newPassword) }) { Text("Zmień") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } })
+    AlertDialog(
+        onDismissRequest = onDismiss, 
+        title = { Text("Zmień hasło") }, 
+        text = { 
+            Column { 
+                TextField(value = oldPassword, onValueChange = { oldPassword = it }, label = { Text("Obecne hasło") }, visualTransformation = PasswordVisualTransformation()); 
+                Spacer(modifier = Modifier.height(8.dp)); 
+                TextField(value = newPassword, onValueChange = { newPassword = it }, label = { Text("Nowe hasło") }, visualTransformation = PasswordVisualTransformation()) 
+            } 
+        }, 
+        confirmButton = { Button(onClick = { onConfirm(oldPassword, newPassword) }) { Text("Zmień") } }, 
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } }
+    )
 }
 
-// Funkcja pomocnicza: Wyświetla dialog usunięcia konta
 @Composable
 fun DeleteAccountDialog(onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var password by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Usuń konto") }, text = { Column { Text("Aby usunąć konto, wpisz swoje hasło. Tej operacji nie można cofnąć."); Spacer(modifier = Modifier.height(8.dp)); TextField(value = password, onValueChange = { password = it }, label = { Text("Hasło") }, visualTransformation = PasswordVisualTransformation()) } }, confirmButton = { Button(onClick = { onConfirm(password) }, colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) { Text("Usuń konto") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } })
+    AlertDialog(
+        onDismissRequest = onDismiss, 
+        title = { Text("Usuń konto") }, 
+        text = { 
+            Column { 
+                Text("Aby usunąć konto, wpisz swoje hasło. Tej operacji nie można cofnąć."); 
+                Spacer(modifier = Modifier.height(8.dp)); 
+                TextField(value = password, onValueChange = { password = it }, label = { Text("Hasło") }, visualTransformation = PasswordVisualTransformation()) 
+            } 
+        }, 
+        confirmButton = { Button(onClick = { onConfirm(password) }, colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) { Text("Usuń konto") } }, 
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } }
+    )
 }
 
 @Preview(showBackground = true)

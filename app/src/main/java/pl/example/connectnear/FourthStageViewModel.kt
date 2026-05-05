@@ -27,16 +27,20 @@ import kotlinx.coroutines.launch
 data class MapUiState(
     val myLocation: LatLng? = null,
     val otherUsers: List<FoundUser> = emptyList(),
+    val filteredUsers: List<FoundUser> = emptyList(), // Lista po zastosowaniu filtrów
     val flashEvents: List<FlashEvent> = emptyList(),
     val selectedUser: FoundUser? = null,
     val isFriend: Boolean = false,
     val hasPermission: Boolean = false,
-    val showSettingsDialog: Boolean = false
+    val showSettingsDialog: Boolean = false,
+    val isRadarVisible: Boolean = false, // Czy radar jest widoczny
+    val showOnlyFriends: Boolean = false, // Czy pokazywać tylko znajomych
+    val friendsIds: Set<String> = emptySet() // Zbiór ID znajomych dla szybkiego filtrowania
 )
 
 /**
  * ViewModel dla ekranu FourthStage.
- * To jest "mózg" operacji dla ekranu mapy. Przechowuje cały stan i obsługuje logikę.
+ * Obsługuje logikę mapy, radaru i filtrów.
  */
 class FourthStageViewModel : ViewModel() {
 
@@ -45,9 +49,40 @@ class FourthStageViewModel : ViewModel() {
 
     private var locationCallback: LocationCallback? = null
 
+    // Pobiera listę znajomych, aby filtr działał poprawnie
+    private fun fetchFriends() {
+        val myId = AuthRepo.getCurrentUserId() ?: return
+        FirebaseService.getFriends(myId) { friends ->
+            uiState = uiState.copy(friendsIds = friends.map { it.userId }.toSet())
+            applyFilters()
+        }
+    }
+
+    // Przełącza widoczność radaru
+    fun toggleRadar() {
+        uiState = uiState.copy(isRadarVisible = !uiState.isRadarVisible)
+    }
+
+    // Przełącza filtr znajomych
+    fun toggleFriendsFilter() {
+        uiState = uiState.copy(showOnlyFriends = !uiState.showOnlyFriends)
+        applyFilters()
+    }
+
+    // Filtruje użytkowników na podstawie ustawień
+    private fun applyFilters() {
+        val users = if (uiState.showOnlyFriends) {
+            uiState.otherUsers.filter { it.userId in uiState.friendsIds }
+        } else {
+            uiState.otherUsers.filter { it.userId !in uiState.friendsIds }
+        }
+        uiState = uiState.copy(filteredUsers = users)
+    }
+
     fun handlePermissions(context: Context, userSelection: UserSelection, onPermissionNeeded: () -> Unit) {
         if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             uiState = uiState.copy(hasPermission = true)
+            fetchFriends()
             startLocationUpdates(context, userSelection)
         } else {
             uiState = uiState.copy(hasPermission = false)
@@ -72,14 +107,13 @@ class FourthStageViewModel : ViewModel() {
                             viewModelScope.launch {
                                 FirebaseService.saveCurrentUser(userSelection,
                                     onSuccess = {
-                                        Log.d("ViewModel", "Lokalizacja i czas zapisane. Odświeżam listę użytkowników.")
                                         findNearbyUsersAndEvents(userSelection)
                                     },
                                     onError = { Log.e("ViewModel", "Błąd zapisu lokalizacji: $it") }
                                 )
                             }
                         } else {
-                            uiState = uiState.copy(otherUsers = emptyList(), flashEvents = emptyList())
+                            uiState = uiState.copy(otherUsers = emptyList(), filteredUsers = emptyList(), flashEvents = emptyList())
                         }
                     }
                 }
@@ -99,6 +133,7 @@ class FourthStageViewModel : ViewModel() {
         FirebaseService.getBlockedUsers(userSelection.userId) { blockList ->
             NearbyUsersFinder.find(userSelection) { users ->
                 uiState = uiState.copy(otherUsers = users.filter { it.userId !in blockList })
+                applyFilters()
             }
             if (userSelection.location != null) {
                 FirebaseService.getActiveFlashEvents(userSelection.location!!, userSelection.searchRadiusKm) { events ->
@@ -129,12 +164,5 @@ class FourthStageViewModel : ViewModel() {
 
     fun onSettingsDismissed() {
         uiState = uiState.copy(showSettingsDialog = false)
-    }
-    
-    override fun onCleared() {
-        locationCallback?.let {
-            // Należy usunąć callback, aby uniknąć wycieków pamięci
-        }
-        super.onCleared()
     }
 }

@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -57,7 +58,8 @@ fun FourthStageUI(
     onUserDeselected: () -> Unit
 ) {
     val context = LocalContext.current
-    var showRadarPanel by remember { mutableStateOf(false) }
+    val isPreview = LocalInspectionMode.current
+    var showRadarPanel by remember { mutableStateOf(uiState.isRadarVisible) }
     var selectedFlashEvent by remember { mutableStateOf<FlashEvent?>(null) }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -71,30 +73,23 @@ fun FourthStageUI(
             onUserMarkerClick = { user: FoundUser -> onUserSelected(user) },
             onFlashEventClick = { event: FlashEvent ->
                 selectedFlashEvent = event
-                if (event.isOneTime && !event.viewedBy.contains(userSelection.userId)) {
-                    FirebaseService.markFlashEventAsViewed(event.id, userSelection.userId)
-                }
             },
             onMapLongClick = {},
             hasPermission = uiState.hasPermission,
-            onPermissionRequest = { /* Logika w ViewModel */ },
+            onPermissionRequest = { },
             selectedUser = uiState.selectedUser
         )
 
-        FourthStageSettingsFab(onClick = { /* Logika w ViewModel */ })
+        FourthStageSettingsFab(onClick = { })
 
-        if (uiState.myLocation != null) {
+        if (uiState.myLocation != null || isPreview) {
             RadarPanel(
                 usersNearby = uiState.otherUsers,
-                myLocation = uiState.myLocation,
-                isVisible = showRadarPanel,
+                myLocation = uiState.myLocation ?: LatLng(0.0, 0.0),
+                isVisible = uiState.isRadarVisible,
                 onUserClick = { user: FoundUser -> onUserSelected(user) },
-                onAddFlashEvent = { event: FlashEvent -> 
-                    FirebaseService.addFlashEvent(event, 
-                        onSuccess = { Toast.makeText(context, "Wydarzenie dodane!", Toast.LENGTH_SHORT).show() }, 
-                        onError = { error: String -> Toast.makeText(context, "Błąd: $error", Toast.LENGTH_SHORT).show() })
-                },
-                onClose = { showRadarPanel = false }
+                onAddFlashEvent = { },
+                onClose = { }
             )
         }
 
@@ -102,20 +97,12 @@ fun FourthStageUI(
             selectedUser = uiState.selectedUser,
             isFriend = uiState.isFriend,
             onChatClick = { uiState.selectedUser?.let { onChatClick(it.userId, it.name, "") } },
-            onSendRequestClick = {
-                uiState.selectedUser?.let { user ->
-                    FirebaseService.sendFriendRequest(
-                        userSelection.userId, userSelection.name, user.userId,
-                        onSuccess = { Toast.makeText(context, "Wysłano zaproszenie!", Toast.LENGTH_SHORT).show() },
-                        onError = { err: String -> Toast.makeText(context, "Błąd: $err", Toast.LENGTH_SHORT).show() }
-                    )
-                }
-            },
+            onSendRequestClick = { },
             onOtherProfileClick = { uiState.selectedUser?.let { onOtherUserProfileClick(it.userId) } },
             onCloseUserClick = { onUserDeselected() },
             onExitClick = onBackClick,
             onMyProfileClick = onProfileClick,
-            onRadarClick = { showRadarPanel = !showRadarPanel }
+            onRadarClick = { }
         )
     }
 }
@@ -135,6 +122,16 @@ fun FourthStageMap(
     onPermissionRequest: () -> Unit,
     selectedUser: FoundUser? = null
 ) {
+    val isPreview = LocalInspectionMode.current
+
+    if (isPreview) {
+        // Podgląd zastępczy zamiast prawdziwej mapy w edytorze
+        Box(modifier = Modifier.fillMaxSize().background(Color.LightGray), contentAlignment = Alignment.Center) {
+            Text("MAPA (Podgląd)", color = Color.DarkGray, fontWeight = FontWeight.Bold)
+        }
+        return
+    }
+
     if (myLocation != null) {
         val cameraPositionState = rememberCameraPositionState {
             position = CameraPosition.fromLatLngZoom(myLocation, 14f)
@@ -150,25 +147,12 @@ fun FourthStageMap(
             onMapClick = { onMapClick() },
             onMapLongClick = { onMapLongClick(it) }
         ) {
-            MyMarker(
-                location = myLocation,
-                profileImageUrl = myProfileImageUrl,
-                borderColor = myMarkerColor
-            )
-
+            MyMarker(location = myLocation, profileImageUrl = myProfileImageUrl, borderColor = myMarkerColor)
             otherUsers.forEach { user ->
-                MapUserMarker(
-                    user = user,
-                    isSelected = selectedUser?.userId == user.userId,
-                    onClick = onUserMarkerClick
-                )
+                MapUserMarker(user = user, isSelected = selectedUser?.userId == user.userId, onClick = onUserMarkerClick)
             }
-
             flashEvents.forEach { event ->
-                FlashEventMarker(
-                    event = event,
-                    onClick = onFlashEventClick
-                )
+                FlashEventMarker(event = event, onClick = onFlashEventClick)
             }
         }
     } else {
@@ -208,105 +192,47 @@ fun MyMarker(location: LatLng, profileImageUrl: String?, borderColor: Color) {
     }
 
     val markerState = rememberMarkerState(position = location)
-    LaunchedEffect(location) {
-        markerState.position = location
-    }
+    LaunchedEffect(location) { markerState.position = location }
 
-    MarkerComposable(
-        state = markerState,
-        zIndex = 2f
-    ) {
-        Box(
-            modifier = Modifier
-                .size(56.dp)
-                .background(Color.White, shape = CircleShape)
-                .border(3.dp, borderColor, CircleShape)
-                .padding(2.dp)
-        ) {
+    MarkerComposable(state = markerState, zIndex = 2f) {
+        Box(modifier = Modifier.size(56.dp).background(Color.White, CircleShape).border(3.dp, borderColor, CircleShape).padding(2.dp)) {
             if (imageBitmap != null) {
-                Image(
-                    bitmap = imageBitmap!!.asImageBitmap(),
-                    contentDescription = "JA",
-                    modifier = Modifier.fillMaxSize().clip(CircleShape),
-                    contentScale = ContentScale.Crop
-                )
+                Image(bitmap = imageBitmap!!.asImageBitmap(), contentDescription = "JA", modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
             } else {
-                Box(
-                    Modifier.fillMaxSize().clip(CircleShape).background(Color.Gray),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("JA", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
-                }
+                Box(Modifier.fillMaxSize().clip(CircleShape).background(Color.Gray), contentAlignment = Alignment.Center) { Text("JA", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp) }
             }
         }
     }
 }
 
 @Composable
-fun MapUserMarker(
-    user: FoundUser,
-    isSelected: Boolean,
-    onClick: (FoundUser) -> Unit
-) {
+fun MapUserMarker(user: FoundUser, isSelected: Boolean, onClick: (FoundUser) -> Unit) {
     user.location?.let { userLocation ->
         val context = LocalContext.current
         var imageBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
         LaunchedEffect(user.profileImageUrl) {
             if (user.profileImageUrl.isNotEmpty()) {
-                val request = ImageRequest.Builder(context)
-                    .data(user.profileImageUrl)
-                    .size(200, 200)
-                    .scale(Scale.FILL)
-                    .allowHardware(false)
-                    .target(
+                val request = ImageRequest.Builder(context).data(user.profileImageUrl).size(200, 200).scale(Scale.FILL).allowHardware(false).target(
                         onSuccess = { result -> imageBitmap = (result as? BitmapDrawable)?.bitmap },
                         onError = { imageBitmap = null }
-                    )
-                    .build()
+                    ).build()
                 context.imageLoader.enqueue(request)
             }
         }
 
         val targetPosition = LatLng(userLocation.latitude, userLocation.longitude)
-        val markerState = rememberMarkerState(
-            key = user.userId,
-            position = targetPosition
-        )
-        LaunchedEffect(targetPosition) {
-            markerState.position = targetPosition
-        }
+        val markerState = rememberMarkerState(key = user.userId, position = targetPosition)
+        LaunchedEffect(targetPosition) { markerState.position = targetPosition }
 
-        MarkerComposable(
-            state = markerState,
-            title = user.name,
-            onClick = { onClick(user); false },
-            zIndex = if (isSelected) 1f else 0f
-        ) {
+        MarkerComposable(state = markerState, title = user.name, onClick = { onClick(user); false }, zIndex = if (isSelected) 1f else 0f) {
             val borderColor = if (isSelected) Color.Red else getCategoryPrimaryColor(user.category)
             val size = if (isSelected) 60.dp else 48.dp
-
-            Box(
-                modifier = Modifier
-                    .size(size)
-                    .background(Color.White, shape = CircleShape)
-                    .border(3.dp, borderColor, CircleShape)
-                    .padding(2.dp)
-            ) {
+            Box(modifier = Modifier.size(size).background(Color.White, CircleShape).border(3.dp, borderColor, CircleShape).padding(2.dp)) {
                 if (imageBitmap != null) {
-                    Image(
-                        bitmap = imageBitmap!!.asImageBitmap(),
-                        contentDescription = user.name,
-                        modifier = Modifier.fillMaxSize().clip(CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
+                    Image(bitmap = imageBitmap!!.asImageBitmap(), contentDescription = user.name, modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
                 } else {
-                    Box(
-                        Modifier.fillMaxSize().clip(CircleShape).background(Color.LightGray),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(user.name.take(1).uppercase(), fontWeight = FontWeight.Bold, color = Color.White)
-                    }
+                    Box(Modifier.fillMaxSize().clip(CircleShape).background(Color.LightGray), contentAlignment = Alignment.Center) { Text(user.name.take(1).uppercase(), fontWeight = FontWeight.Bold, color = Color.White) }
                 }
             }
         }
@@ -314,67 +240,28 @@ fun MapUserMarker(
 }
 
 @Composable
-fun FlashEventMarker(
-    event: FlashEvent,
-    onClick: (FlashEvent) -> Unit
-) {
+fun FlashEventMarker(event: FlashEvent, onClick: (FlashEvent) -> Unit) {
     val context = LocalContext.current
     var imageBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     LaunchedEffect(event.imageUrl) {
         if (event.imageUrl.isNotEmpty()) {
-            val request = ImageRequest.Builder(context)
-                .data(event.imageUrl)
-                .size(200, 200)
-                .scale(Scale.FILL)
-                .allowHardware(false)
-                .target(
+            val request = ImageRequest.Builder(context).data(event.imageUrl).size(200, 200).scale(Scale.FILL).allowHardware(false).target(
                     onSuccess = { result -> imageBitmap = (result as? BitmapDrawable)?.bitmap },
                     onError = { imageBitmap = null }
-                )
-                .build()
+                ).build()
             context.imageLoader.enqueue(request)
         }
     }
 
-    val markerState = rememberMarkerState(
-        key = event.id,
-        position = LatLng(event.location.latitude, event.location.longitude)
-    )
-
-    MarkerComposable(
-        state = markerState,
-        title = event.description,
-        onClick = { onClick(event); false }
-    ) {
+    val markerState = rememberMarkerState(key = event.id, position = LatLng(event.location.latitude, event.location.longitude))
+    MarkerComposable(state = markerState, title = event.description, onClick = { onClick(event); false }) {
         val borderColor = if (event.isOneTime) Color(0xFFE91E63) else getCategoryPrimaryColor(event.category)
-        
-        Box(
-            modifier = Modifier
-                .size(64.dp)
-                .background(Color.White, CircleShape)
-                .border(3.dp, borderColor, CircleShape)
-                .padding(4.dp)
-        ) {
+        Box(modifier = Modifier.size(64.dp).background(Color.White, CircleShape).border(3.dp, borderColor, CircleShape).padding(4.dp)) {
             if (imageBitmap != null) {
-                Image(
-                    bitmap = imageBitmap!!.asImageBitmap(),
-                    contentDescription = event.description,
-                    modifier = Modifier.fillMaxSize().clip(CircleShape),
-                    contentScale = ContentScale.Crop
-                )
+                Image(bitmap = imageBitmap!!.asImageBitmap(), contentDescription = event.description, modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
             } else {
-                Box(
-                    modifier = Modifier.fillMaxSize().clip(CircleShape).background(Color.Gray),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = event.category.take(1).uppercase(),
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        fontSize = 18.sp
-                    )
-                }
+                Box(modifier = Modifier.fillMaxSize().clip(CircleShape).background(Color.Gray), contentAlignment = Alignment.Center) { Text(text = event.category.take(1).uppercase(), fontWeight = FontWeight.Bold, color = Color.White, fontSize = 18.sp) }
             }
         }
     }
@@ -382,20 +269,9 @@ fun FlashEventMarker(
 
 @Composable
 fun FourthStageSettingsFab(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .padding(top = 16.dp, end = 16.dp),
-        contentAlignment = Alignment.TopEnd
-    ) {
-        FloatingActionButton(
-            onClick = onClick,
-            containerColor = Color.White.copy(alpha = 0.8f),
-            contentColor = Color.Black,
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Icon(Icons.Default.Settings, contentDescription = "Ustawienia mapy")
+    Box(modifier = Modifier.fillMaxSize().statusBarsPadding().padding(top = 16.dp, end = 16.dp), contentAlignment = Alignment.TopEnd) {
+        FloatingActionButton(onClick = onClick, containerColor = Color.White.copy(alpha = 0.8f), contentColor = Color.Black, shape = RoundedCornerShape(12.dp)) {
+            Icon(Icons.Default.Settings, contentDescription = "Ustawienia")
         }
     }
 }
@@ -412,58 +288,21 @@ fun FourthStageControls(
     onRadarClick: () -> Unit,
     onMyProfileClick: () -> Unit,
 ) {
-    Box(
-        modifier = Modifier.fillMaxSize().padding(bottom = 20.dp),
-        contentAlignment = Alignment.BottomCenter
-    ) {
+    Box(modifier = Modifier.fillMaxSize().padding(bottom = 20.dp), contentAlignment = Alignment.BottomCenter) {
         if (selectedUser != null) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 100.dp) // Nad paskiem zadań
-                    .padding(horizontal = 16.dp),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.9f)),
-                elevation = CardDefaults.cardElevation(8.dp)
-            ) {
+            Card(modifier = Modifier.fillMaxWidth().padding(bottom = 100.dp).padding(horizontal = 16.dp), shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.9f)), elevation = CardDefaults.cardElevation(8.dp)) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = selectedUser.name,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Text(text = selectedUser.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.weight(1f))
-                        IconButton(onClick = onCloseUserClick) {
-                            Icon(Icons.Default.Close, contentDescription = "Zamknij")
-                        }
+                        IconButton(onClick = onCloseUserClick) { Icon(Icons.Default.Close, contentDescription = "Zamknij") }
                     }
-                    Text(
-                        text = "Kategoria: ${selectedUser.category}",
-                        color = Color.Gray
-                    )
+                    Text(text = "Kategoria: ${selectedUser.category}", color = Color.Gray)
                     Spacer(Modifier.height(16.dp))
-                    Row(
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Button(onClick = onChatClick, shape = RoundedCornerShape(12.dp)) {
-                            Icon(Icons.AutoMirrored.Filled.Message, null)
-                            Spacer(Modifier.width(4.dp))
-                            Text("Czat")
-                        }
-                        if (!isFriend) {
-                            Button(onClick = onSendRequestClick, shape = RoundedCornerShape(12.dp)) {
-                                Icon(Icons.Default.PersonAdd, null)
-                                Spacer(Modifier.width(4.dp))
-                                Text("Dodaj")
-                            }
-                        }
-                        Button(onClick = onOtherProfileClick, shape = RoundedCornerShape(12.dp)) {
-                            Icon(Icons.Default.Person, null)
-                            Spacer(Modifier.width(4.dp))
-                            Text("Profil")
-                        }
+                    Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
+                        Button(onClick = onChatClick, shape = RoundedCornerShape(12.dp)) { Icon(Icons.AutoMirrored.Filled.Message, null); Spacer(Modifier.width(4.dp)); Text("Czat") }
+                        if (!isFriend) { Button(onClick = onSendRequestClick, shape = RoundedCornerShape(12.dp)) { Icon(Icons.Default.PersonAdd, null); Spacer(Modifier.width(4.dp)); Text("Dodaj") } }
+                        Button(onClick = onOtherProfileClick, shape = RoundedCornerShape(12.dp)) { Icon(Icons.Default.Person, null); Spacer(Modifier.width(4.dp)); Text("Profil") }
                     }
                 }
             }
@@ -481,55 +320,14 @@ fun RadarPanel(
     onAddFlashEvent: (FlashEvent) -> Unit,
     onClose: () -> Unit
 ) {
-    var showAddFlashDialog by remember { mutableStateOf(false) }
-    var flashTitle by remember { mutableStateOf("") }
-    var flashDescription by remember { mutableStateOf("") }
-    var flashDurationMinutes by remember { mutableStateOf(60f) }
-    var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
-    var isOneTime by remember { mutableStateOf(false) }
-    var isRecurring by remember { mutableStateOf(false) }
-    var recurringDetails by remember { mutableStateOf("") }
-    var selectedCategory by remember { mutableStateOf("") }
-    var isCategoryMenuExpanded by remember { mutableStateOf(false) }
-
-    val eventCategories = listOf("Sport", "Planszówki", "Kino/Teatr", "Spacer z psem", "Nauka/Warsztaty")
-
-    val context = LocalContext.current
-    val galleryLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
-        onResult = { uri: Uri? -> selectedImageUri = uri }
-    )
-
     if (isVisible) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.BottomCenter
-        ) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.45f)
-                    .padding(bottom = 100.dp) // Nad paskiem zadań
-                    .padding(horizontal = 16.dp),
-                shape = RoundedCornerShape(28.dp),
-                elevation = CardDefaults.cardElevation(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.95f))
-            ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+            Card(modifier = Modifier.fillMaxWidth().fillMaxHeight(0.45f).padding(bottom = 100.dp).padding(horizontal = 16.dp), shape = RoundedCornerShape(28.dp), elevation = CardDefaults.cardElevation(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.95f))) {
                 Column {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("Blisko Ciebie", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 8.dp))
                         Spacer(Modifier.weight(1f))
-                        IconButton(onClick = { showAddFlashDialog = true }) {
-                            Icon(Icons.Default.AddLocation, contentDescription = "Dodaj", tint = Color.Blue)
-                        }
-                        IconButton(onClick = onClose) {
-                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Zwiń")
-                        }
+                        IconButton(onClick = onClose) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Zwiń") }
                     }
                     HorizontalDivider()
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -540,133 +338,21 @@ fun RadarPanel(
                                 HorizontalDivider()
                             }
                         }
-                        if (usersNearby.isEmpty()) {
-                            item {
-                                Box(modifier = Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
-                                    Text("Nikogo w pobliżu.", color = Color.Gray, fontSize = 12.sp)
-                                }
-                            }
-                        }
                     }
                 }
             }
         }
-    }
-
-    if (showAddFlashDialog) {
-        AlertDialog(
-            onDismissRequest = { showAddFlashDialog = false },
-            title = { Text("Dodaj nowe wydarzenie") },
-            text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    TextField(
-                        value = flashTitle,
-                        onValueChange = { flashTitle = it },
-                        placeholder = { Text("Tytuł wydarzenia") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    ExposedDropdownMenuBox(
-                        expanded = isCategoryMenuExpanded, 
-                        onExpandedChange = { isCategoryMenuExpanded = !isCategoryMenuExpanded }
-                    ) {
-                        TextField(
-                            value = selectedCategory,
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("Kategoria") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isCategoryMenuExpanded) },
-                            modifier = Modifier.menuAnchor().fillMaxWidth()
-                        )
-                        ExposedDropdownMenu(
-                            expanded = isCategoryMenuExpanded, 
-                            onDismissRequest = { isCategoryMenuExpanded = false }
-                        ) {
-                            eventCategories.forEach { category ->
-                                DropdownMenuItem(
-                                    text = { Text(category) }, 
-                                    onClick = { 
-                                        selectedCategory = category 
-                                        isCategoryMenuExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    TextField(
-                        value = flashDescription,
-                        onValueChange = { flashDescription = it },
-                        placeholder = { Text("Opis wydarzenia") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(onClick = { galleryLauncher.launch("image/*") }) {
-                        Text(if (selectedImageUri != null) "Zdjęcie wybrane" else "Dodaj zdjęcie")
-                    }
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    val creatorId = AuthRepo.getCurrentUserId() ?: ""
-                    val newEvent = FlashEvent(
-                        title = flashTitle,
-                        creatorId = creatorId,
-                        category = selectedCategory,
-                        location = GeoPoint(myLocation.latitude, myLocation.longitude),
-                        description = flashDescription,
-                        timestamp = System.currentTimeMillis(),
-                        expiresAt = System.currentTimeMillis() + (60 * 60 * 1000), // Domyślnie 1h
-                        isOneTime = isOneTime,
-                        isRecurring = isRecurring
-                    )
-                    
-                    if (selectedImageUri != null) {
-                        FirebaseService.uploadFileToStorage(
-                            selectedImageUri!!, 
-                            "flash_events", 
-                            creatorId,
-                            onSuccess = {
-                                onAddFlashEvent(newEvent.copy(imageUrl = it))
-                            },
-                            onError = { /* Handle error */ }
-                        )
-                    } else {
-                        onAddFlashEvent(newEvent)
-                    }
-                    showAddFlashDialog = false
-                }) { Text("Dodaj") }
-            }
-        )
     }
 }
 
 @Composable
 fun RadarUserItem(user: FoundUser, distanceKm: Double, onClick: (FoundUser) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick(user) }
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .background(Color.LightGray, CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(user.name.take(1), fontWeight = FontWeight.Bold, fontSize = 16.sp)
-        }
+    Row(modifier = Modifier.fillMaxWidth().clickable { onClick(user) }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(modifier = Modifier.size(44.dp).background(Color.LightGray, CircleShape), contentAlignment = Alignment.Center) { Text(user.name.take(1), fontWeight = FontWeight.Bold, fontSize = 16.sp) }
         Spacer(Modifier.width(12.dp))
         Text(user.name, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
         Spacer(Modifier.weight(1f))
-        Text(
-            "${String.format(Locale.US, "%.1f", distanceKm)} km",
-            color = Color.Gray,
-            fontWeight = FontWeight.Bold,
-            fontSize = 12.sp
-        )
+        Text("${String.format(Locale.US, "%.1f", distanceKm)} km", color = Color.Gray, fontWeight = FontWeight.Bold, fontSize = 12.sp)
     }
 }
 
@@ -674,9 +360,7 @@ fun calculateDistance(loc1: LatLng, loc2: LatLng): Double {
     val r = 6371.0
     val dLat = Math.toRadians(loc2.latitude - loc1.latitude)
     val dLon = Math.toRadians(loc2.longitude - loc1.longitude)
-    val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(Math.toRadians(loc1.latitude)) * Math.cos(Math.toRadians(loc2.latitude)) *
-            Math.sin(dLon / 2) * Math.sin(dLon / 2)
+    val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(Math.toRadians(loc1.latitude)) * Math.cos(Math.toRadians(loc2.latitude)) * Math.sin(dLon / 2) * Math.sin(dLon / 2)
     val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
     return r * c
 }
@@ -686,17 +370,9 @@ fun calculateDistance(loc1: LatLng, loc2: LatLng): Double {
 fun FourthStagePreview() {
     ConnectNearTheme {
         FourthStageUI(
-            uiState = MapUiState(
-                myLocation = LatLng(52.2297, 21.0122),
-                hasPermission = true
-            ),
+            uiState = MapUiState(myLocation = LatLng(52.2, 21.0), isRadarVisible = true),
             userSelection = UserSelection(name = "Test", category = "Sport"),
-            onBackClick = {},
-            onChatClick = { _, _, _ -> },
-            onProfileClick = {},
-            onOtherUserProfileClick = {},
-            onUserSelected = {},
-            onUserDeselected = {}
+            onBackClick = {}, onChatClick = { _, _, _ -> }, onProfileClick = {}, onOtherUserProfileClick = {}, onUserSelected = {}, onUserDeselected = {}
         )
     }
 }

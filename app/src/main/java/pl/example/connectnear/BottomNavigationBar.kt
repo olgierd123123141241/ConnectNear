@@ -1,10 +1,7 @@
 package pl.example.connectnear
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -15,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
@@ -37,18 +35,21 @@ fun BottomNavigationBar(navController: NavController, onRadarToggle: () -> Unit 
         BottomNavItem("Profil", Icons.Default.Person, "profile_screen")
     )
 
-    // Półprzezroczysty, zaokrąglony pasek zadań
+    // Pasek zadań - podniesiony i z efektem "szkła"
     Surface(
         modifier = Modifier
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(24.dp)),
-        color = Color.White.copy(alpha = 0.75f), // Prześwitywanie
-        tonalElevation = 8.dp
+            .padding(horizontal = 16.dp)
+            .navigationBarsPadding() // Podnosi pasek nad systemową linię nawigacji
+            .padding(bottom = 12.dp) // Dodatkowy odstęp od krawędzi ekranu
+            .clip(RoundedCornerShape(30.dp)),
+        color = Color.White.copy(alpha = 0.88f), // Bardziej przejrzysty, ale wyraźny
+        shadowElevation = 10.dp,
+        tonalElevation = 5.dp
     ) {
         NavigationBar(
             containerColor = Color.Transparent,
             tonalElevation = 0.dp,
-            modifier = Modifier.height(70.dp)
+            modifier = Modifier.height(80.dp) // Zwiększona wysokość, by napisy były czytelne
         ) {
             val navBackStackEntry by navController.currentBackStackEntryAsState()
             val currentRoute = navBackStackEntry?.destination?.route
@@ -58,10 +59,10 @@ fun BottomNavigationBar(navController: NavController, onRadarToggle: () -> Unit 
                 
                 NavigationBarItem(
                     selected = isSelected,
+                    alwaysShowLabel = true, // Gwarantuje, że napisy pod ikonami są zawsze widoczne
                     onClick = {
                         if (item.isAction) {
                             if (item.route == "radar_action") {
-                                // Jeśli nie jesteśmy na mapie, najpierw tam idziemy
                                 if (currentRoute != "fourth_stage") {
                                     navController.navigate("fourth_stage")
                                 }
@@ -81,19 +82,20 @@ fun BottomNavigationBar(navController: NavController, onRadarToggle: () -> Unit 
                         Icon(
                             imageVector = item.icon, 
                             contentDescription = item.label,
-                            modifier = Modifier.size(26.dp),
-                            tint = if (isSelected) Color(0xFF7B96FF) else Color.Gray
+                            modifier = Modifier.size(24.dp),
+                            tint = if (isSelected) Color(0xFF7B96FF) else Color(0xFF666666)
                         )
                     },
                     label = { 
                         Text(
                             text = item.label, 
-                            fontSize = 10.sp,
-                            color = if (isSelected) Color(0xFF7B96FF) else Color.Gray
+                            fontSize = 11.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isSelected) Color(0xFF7B96FF) else Color(0xFF333333)
                         ) 
                     },
                     colors = NavigationBarItemDefaults.colors(
-                        indicatorColor = Color(0xFF7B96FF).copy(alpha = 0.1f)
+                        indicatorColor = Color(0xFF7B96FF).copy(alpha = 0.15f)
                     )
                 )
             }

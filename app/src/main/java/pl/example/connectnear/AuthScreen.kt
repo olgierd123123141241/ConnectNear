@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextAlign
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -150,11 +151,15 @@ fun AuthScreen(
                     fontSize = 26.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF444444),
-                    modifier = Modifier.padding(bottom = 24.dp)
+                    modifier = Modifier.padding(bottom = 8.dp)
                 )
 
                 if (errorMessage.isNotEmpty()) {
                     Text(text = errorMessage, color = Color.Red, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+                }
+                
+                if (successMessage.isNotEmpty()) {
+                    Text(text = successMessage, color = Color(0xFF4CAF50), fontSize = 14.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.padding(bottom = 12.dp))
                 }
 
                 if (isRegisterMode) {
@@ -191,12 +196,14 @@ fun AuthScreen(
 
                 Button(
                     onClick = {
-                        isLoading = true; errorMessage = ""
+                        isLoading = true; errorMessage = ""; successMessage = ""
                         if (isRegisterMode) {
                             FirebaseService.signUp(email, password,
                                 onSuccess = { 
                                     FirebaseService.updateProfileName(name, { 
-                                        isLoading = false; isRegisterMode = false; successMessage = "Zweryfikuj email" 
+                                        isLoading = false
+                                        successMessage = "Konto utworzone!\nSprawdź swoją pocztę e-mail, aby potwierdzić rejestrację."
+                                        // Nie przełączamy trybu od razu, by użytkownik mógł przeczytać komunikat
                                     }, { err -> isLoading = false; errorMessage = err })
                                 },
                                 onError = { isLoading = false; errorMessage = it }
@@ -232,7 +239,7 @@ fun AuthScreen(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                TextButton(onClick = { isRegisterMode = !isRegisterMode }) {
+                TextButton(onClick = { isRegisterMode = !isRegisterMode; errorMessage = ""; successMessage = "" }) {
                     Text(
                         text = if (isRegisterMode) "Masz już konto? Zaloguj się" else "Nie masz konta? Zarejestruj się",
                         color = buttonBlue,
